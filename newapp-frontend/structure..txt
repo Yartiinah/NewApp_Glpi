@@ -1,0 +1,19 @@
+[ 1. MAIN.JS ]        <-- Le Démarreur (Crée l'application et charge Pinia/Router)
+       │
+       ▼ (Englobe...)
+[ 2. APP.VUE ]        <-- Le Squelette (La carrosserie générale avec la NavBar)
+       │
+       ▼ (Affiche via <router-view />...)
+  [ 3. VIEW ]         <-- La Page active (Ex: ImportFile.vue, Profil.vue)
+         │
+         ▼ (Contient...)
+    [ 4. COMPONENT ]  <-- Les Éléments de la page (Ex: Un bouton, un formulaire)
+           │
+           ▼ (Déclenche une action...)
+      [ 5. STORE ]    <-- La Mémoire centrale (Pinia - Met à jour l'état de l'application)
+             │
+             ▼ (Demande au...)
+        [ 6. SERVICE ] <-- Le Téléphone réseau (Prépare et envoie la requête JSON)
+               │
+               ▼ (Appelle...)
+          [ 7. ROUTE BACKEND ] <-- Le Serveur final (Ex: Node.js, PHP qui modifie SQLite)

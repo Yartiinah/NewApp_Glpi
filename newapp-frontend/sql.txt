@@ -1,0 +1,40 @@
+-- Supprimer tous les tickets
+DELETE FROM glpi_tickets;
+DELETE FROM glpi_ticketusers;
+DELETE FROM glpi_ticketvalidations;
+DELETE FROM glpi_ticketfollowups;
+DELETE FROM glpi_tickettasks;
+DELETE FROM glpi_ticketcosts;
+
+-- Supprimer tous les ordinateurs
+DELETE FROM glpi_computers;
+DELETE FROM glpi_computers_items;
+
+-- Supprimer tous les moniteurs
+DELETE FROM glpi_monitors;
+DELETE FROM glpi_monitors_items;
+
+-- Supprimer tous les utilisateurs (sauf système)
+DELETE FROM glpi_users WHERE id NOT IN (2, 6);
+
+-- Supprimer tous les problèmes
+DELETE FROM glpi_problems;
+
+-- Supprimer tous les changements
+DELETE FROM glpi_changes;
+
+-- Supprimer tous les logiciels
+DELETE FROM glpi_softwares;
+DELETE FROM glpi_softwareversions;
+DELETE FROM glpi_softwarelicenses;
+
+-- Supprimer tous les équipements réseau
+DELETE FROM glpi_networkequipments;
+DELETE FROM glpi_printers;
+DELETE FROM glpi_phones;
+DELETE FROM glpi_peripherals;
+DELETE FROM glpi_racks;
+DELETE FROM glpi_enclosures;
+DELETE FROM glpi_pdus;
+DELETE FROM glpi_passivedcequipments;
+DELETE FROM glpi_unmanageds;
