@@ -7,6 +7,7 @@ import BackofficeDashboard from '../views/backoffice/Dashboard.vue'
 import BackofficeReset from '../views/backoffice/ResetData.vue'
 import BackofficeImport from '../views/backoffice/Import.vue'
 import BackofficeTickets from '../views/backoffice/Tickets.vue'
+import BackofficeKanbanConfig from '../views/backoffice/KanbanConfig.vue'
 
 // Importation des composants Frontoffice (public - URL séparée)
 import FrontofficeElements from '../views/frontoffice/Elements.vue'
@@ -88,9 +89,15 @@ const routes = [
     meta: { requiresBackofficeAuth: true }
   },
   { 
-    path: '/admin/tickets', // Gestion tickets (URL séparée)
+    path: '/admin/tickets',
     name: 'BackofficeTickets', 
     component: BackofficeTickets, 
+    meta: { requiresBackofficeAuth: true }
+  },
+  { 
+    path: '/admin/kanban-config',
+    name: 'BackofficeKanbanConfig', 
+    component: BackofficeKanbanConfig, 
     meta: { requiresBackofficeAuth: true }
   }
 ]

@@ -1,3 +1,4 @@
+com\newapp\controller\KanbanConfigController.class
 com\newapp\service\ResetService.class
 com\newapp\model\DataRecord.class
 com\newapp\NewAppApplication.class
@@ -9,3 +10,4 @@ com\newapp\config\CorsConfig$1.class
 com\newapp\controller\ImportController.class
 com\newapp\controller\DataController.class
 com\newapp\config\CorsConfig.class
+com\newapp\model\KanbanConfig.class

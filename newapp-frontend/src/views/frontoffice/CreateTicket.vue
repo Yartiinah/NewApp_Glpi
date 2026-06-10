@@ -14,6 +14,7 @@
             <span>Détails du Ticket</span>
           </h2>
 
+          <!-- Titre -->
           <div class="form-group">
             <label class="form-label" for="ticket-title">Titre du ticket *</label>
             <input 
@@ -27,6 +28,7 @@
             />
           </div>
 
+          <!-- Type + Priorité -->
           <div class="form-row">
             <div class="form-group half-width">
               <label class="form-label" for="ticket-type">Type d'incident</label>
@@ -48,6 +50,55 @@
             </div>
           </div>
 
+          <!-- ⭐ DEMANDEUR (USER) ⭐ -->
+          <div class="form-group">
+            <label class="form-label" for="ticket-user">
+              <i class="fa-solid fa-user"></i> Demandeur
+            </label>
+            <div class="user-select-wrapper">
+              <div class="user-search-box">
+                <i class="fa-solid fa-magnifying-glass search-icon-mini"></i>
+                <input
+                  type="text"
+                  v-model="userSearch"
+                  placeholder="Rechercher un utilisateur..."
+                  class="form-input form-input-mini"
+                  :disabled="submitting || loadingUsers"
+                  @focus="showUserDropdown = true"
+                  @blur="hideUserDropdown"
+                />
+                <i v-if="loadingUsers" class="fa-solid fa-spinner fa-spin user-loading-icon"></i>
+              </div>
+              <div v-if="showUserDropdown && filteredUsers.length > 0" class="user-dropdown">
+                <div
+                  v-for="user in filteredUsers"
+                  :key="user.id"
+                  class="user-dropdown-item"
+                  :class="{ selected: selectedUserId === user.id }"
+                  @mousedown.prevent="selectUser(user)"
+                >
+                  <i class="fa-solid fa-user user-item-icon"></i>
+                  <div class="user-item-meta">
+                    <span class="user-item-name">{{ user.realname || user.name }}</span>
+                    <span class="user-item-login">{{ user.name }}</span>
+                  </div>
+                  <i v-if="selectedUserId === user.id" class="fa-solid fa-check user-check-icon"></i>
+                </div>
+              </div>
+              <div v-if="showUserDropdown && userSearch && filteredUsers.length === 0 && !loadingUsers" class="user-dropdown">
+                <div class="user-dropdown-empty">Aucun utilisateur trouvé</div>
+              </div>
+            </div>
+            <div v-if="selectedUserName" class="selected-user-badge">
+              <i class="fa-solid fa-user-check"></i>
+              <span>{{ selectedUserName }}</span>
+              <button type="button" @click="clearUser" class="clear-user-btn">
+                <i class="fa-solid fa-times"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Description -->
           <div class="form-group">
             <label class="form-label" for="ticket-desc">Description détaillée *</label>
             <textarea
@@ -217,33 +268,39 @@
 </template>
 
 <script setup>
-// Importation des fonctions Vue réactives
 import { ref, computed, onMounted } from 'vue'
-// Importation des services GLPI
-import { createTicket, getAllItems, linkItemToTicket, addTicketCost } from '../../services/frontoffice/glpi.service'
+import { createTicket, getAllItems, linkItemToTicket, addTicketCost, getUsers } from '../../services/frontoffice/glpi.service'
 
 // Champs du formulaire de ticket
-const title = ref('') // Titre du ticket
-const type = ref(1) // Type: 1=Incident, 2=Demande
-const priority = ref(3) // Priorité: 3=Moyenne
-const description = ref('') // Description détaillée
+const title = ref('')
+const type = ref(1)
+const priority = ref(3)
+const description = ref('')
+
+// Champs utilisateur demandeur
+const users = ref([])
+const loadingUsers = ref(false)
+const userSearch = ref('')
+const showUserDropdown = ref(false)
+const selectedUserId = ref(null)
+const selectedUserName = ref('')
 
 // Champs de coût
-const costDuration = ref('') // Durée en minutes
-const costRate = ref('') // Taux horaire
-const costFixed = ref('') // Coût fixe
-const calculatedTotal = ref(0) // Total calculé
+const costDuration = ref('')
+const costRate = ref('')
+const costFixed = ref('')
+const calculatedTotal = ref(0)
 
 // Liste des équipements disponibles
 const items = ref([])
-const loadingItems = ref(false) // Indicateur de chargement
-const itemSearch = ref('') // Recherche d'équipement
-const selectedItemIds = ref([]) // IDs des équipements sélectionnés (format: "itemtype-id")
+const loadingItems = ref(false)
+const itemSearch = ref('')
+const selectedItemIds = ref([])
 
 // État du formulaire
-const submitting = ref(false) // Indicateur d'envoi
-const successMessage = ref('') // Message de succès
-const errorMessage = ref('') // Message d'erreur
+const submitting = ref(false)
+const successMessage = ref('')
+const errorMessage = ref('')
 
 // Charge la liste des équipements depuis GLPI
 async function fetchEquipments() {
@@ -251,11 +308,54 @@ async function fetchEquipments() {
   try {
     const data = await getAllItems()
     items.value = Array.isArray(data) ? data : []
+    console.log('📦 Équipements chargés:', items.value.length)
   } catch (err) {
     console.error('Failed to load items:', err)
   } finally {
     loadingItems.value = false
   }
+}
+
+// Charge la liste des utilisateurs depuis GLPI
+async function fetchUsers() {
+  loadingUsers.value = true
+  try {
+    const data = await getUsers()
+    users.value = Array.isArray(data) ? data : []
+    console.log('👥 Utilisateurs chargés:', users.value.length)
+  } catch (err) {
+    console.error('Failed to load users:', err)
+    users.value = []
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
+// Filtre les utilisateurs selon la recherche
+const filteredUsers = computed(() => {
+  if (!userSearch.value) return users.value.slice(0, 20)
+  const q = userSearch.value.toLowerCase()
+  return users.value.filter(u =>
+    (u.name && u.name.toLowerCase().includes(q)) ||
+    (u.realname && u.realname.toLowerCase().includes(q))
+  ).slice(0, 20)
+})
+
+function selectUser(user) {
+  selectedUserId.value = user.id
+  selectedUserName.value = user.realname || user.name
+  userSearch.value = ''
+  showUserDropdown.value = false
+}
+
+function clearUser() {
+  selectedUserId.value = null
+  selectedUserName.value = ''
+  userSearch.value = ''
+}
+
+function hideUserDropdown() {
+  setTimeout(() => { showUserDropdown.value = false }, 150)
 }
 
 // Filtre les équipements selon la recherche
@@ -274,8 +374,6 @@ function calculateTotal() {
   const duration = parseFloat(costDuration.value) || 0
   const rate = parseFloat(costRate.value) || 0
   const fixed = parseFloat(costFixed.value) || 0
-
-  // Calcul: (durée en minutes / 60) * taux horaire + coût fixe
   const timeCost = (duration / 60) * rate
   calculatedTotal.value = timeCost + fixed
 }
@@ -293,7 +391,13 @@ async function handleSubmit() {
       content: description.value,
       type: type.value,
       priority: priority.value,
-      status: 1 // Toujours commence à 1: Nouveau
+      status: 1
+    }
+    
+    // Ajouter l'utilisateur demandeur si sélectionné
+    if (selectedUserId.value) {
+      ticketPayload._users_id_requester = selectedUserId.value
+      console.log('👤 Demandeur associé:', selectedUserName.value, '(ID:', selectedUserId.value, ')')
     }
 
     // 1. Crée le ticket dans GLPI
@@ -319,7 +423,6 @@ async function handleSubmit() {
         const duration = parseFloat(costDuration.value) || 0
         const rate = parseFloat(costRate.value) || 0
         const fixed = parseFloat(costFixed.value) || 0
-
         const timeCost = (duration / 60) * rate
 
         await addTicketCost(newTicketId, {
@@ -334,22 +437,16 @@ async function handleSubmit() {
     }
 
     let message = `Ticket #${newTicketId} déclaré avec succès dans GLPI ! ${linkedCount} équipement(s) lié(s).`
-    if (costAdded) {
-      message += ` Coût imputé: ${calculatedTotal.value.toFixed(2)} €.`
-    }
+    if (selectedUserId.value) message += ` Demandeur: ${selectedUserName.value}.`
+    if (costAdded) message += ` Coût imputé: ${calculatedTotal.value.toFixed(2)} €.`
     successMessage.value = message
     
-    // Réinitialise le formulaire mais garde les équipements en cache
-    title.value = ''
-    description.value = ''
-    selectedItemIds.value = []
-    costDuration.value = ''
-    costRate.value = ''
-    costFixed.value = ''
-    calculatedTotal.value = 0
+    // Réinitialise le formulaire
+    resetForm()
     
   } catch (err) {
     errorMessage.value = `Échec de déclaration du ticket : ${err.message}`
+    console.error('❌ Erreur création ticket:', err)
   } finally {
     submitting.value = false
   }
@@ -368,11 +465,17 @@ function resetForm() {
   calculatedTotal.value = 0
   successMessage.value = ''
   errorMessage.value = ''
+  selectedUserId.value = null
+  selectedUserName.value = ''
+  userSearch.value = ''
+  // Ne pas réinitialiser les listes users et items (garder le cache)
 }
 
-// Charge les équipements au montage du composant
+// Charge les données au montage du composant
 onMounted(() => {
+  localStorage.removeItem('glpi_mock_mode')
   fetchEquipments()
+  fetchUsers()
 })
 </script>
 
@@ -403,11 +506,15 @@ onMounted(() => {
 
 .form-card {
   padding: 2rem;
+  background: white;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-.icon-primary { color: var(--primary); }
-.icon-success { color: var(--success); }
-.icon-warning { color: var(--warning); }
+.icon-primary { color: #3b82f6; }
+.icon-success { color: #10b981; }
+.icon-warning { color: #f59e0b; }
 
 .form-row {
   display: flex;
@@ -425,12 +532,43 @@ onMounted(() => {
   }
 }
 
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 0.5rem;
+}
+
+.form-input, .form-select, .form-textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  transition: border-color 0.2s;
+}
+
+.form-input:focus, .form-select:focus, .form-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.form-textarea {
+  resize: vertical;
+}
+
 .form-actions-card {
   background: white;
-  border-radius: var(--radius-lg);
+  border-radius: 0.75rem;
   padding: 1.5rem;
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .submit-row {
@@ -443,9 +581,55 @@ onMounted(() => {
   padding: 0.85rem 2rem;
 }
 
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.btn-secondary {
+  background: #f1f5f9;
+  color: #1e293b;
+  border: 1px solid #e2e8f0;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: #e2e8f0;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Equipment Selection Panel */
+.equipment-selection-panel {
+  position: sticky;
+  top: 1rem;
+}
+
 .equipment-card {
   padding: 2rem;
+  background: white;
+  border-radius: 0.75rem;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
   height: 580px;
@@ -453,7 +637,7 @@ onMounted(() => {
 
 .section-desc {
   font-size: 0.85rem;
-  color: var(--text-muted);
+  color: #64748b;
   margin-bottom: 1.25rem;
 }
 
@@ -467,14 +651,14 @@ onMounted(() => {
   left: 0.75rem;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--text-muted);
+  color: #64748b;
   font-size: 0.9rem;
 }
 
 .form-input-mini {
   padding: 0.5rem 0.75rem 0.5rem 2.25rem;
   font-size: 0.85rem;
-  border-radius: var(--radius-sm);
+  border-radius: 0.375rem;
 }
 
 .equipment-loading, .equipment-empty {
@@ -483,13 +667,13 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: var(--text-muted);
+  color: #64748b;
   gap: 0.75rem;
 }
 
 .equipment-loading i {
   font-size: 2rem;
-  color: var(--primary);
+  color: #3b82f6;
 }
 
 .equipment-empty i {
@@ -500,14 +684,14 @@ onMounted(() => {
 .equipment-list {
   flex: 1;
   overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
   margin-bottom: 1rem;
   background: #f8fafc;
 }
 
 .equipment-item-row {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid #e2e8f0;
   transition: all 0.15s ease;
 }
 
@@ -538,7 +722,7 @@ onMounted(() => {
 .checkbox-custom {
   width: 18px;
   height: 18px;
-  border: 2px solid var(--border);
+  border: 2px solid #cbd5e1;
   border-radius: 5px;
   margin-right: 0.85rem;
   position: relative;
@@ -548,12 +732,12 @@ onMounted(() => {
 }
 
 .checkbox-label-container:hover .checkbox-custom {
-  border-color: var(--success);
+  border-color: #10b981;
 }
 
 .checkbox-input:checked + .checkbox-custom {
-  background-color: var(--success);
-  border-color: var(--success);
+  background-color: #10b981;
+  border-color: #10b981;
 }
 
 .checkbox-input:checked + .checkbox-custom:after {
@@ -570,7 +754,7 @@ onMounted(() => {
 
 .eq-icon {
   font-size: 1.15rem;
-  color: var(--text-muted);
+  color: #64748b;
   margin-right: 0.85rem;
   width: 24px;
   display: flex;
@@ -578,7 +762,7 @@ onMounted(() => {
 }
 
 .checkbox-input:checked ~ .eq-icon {
-  color: var(--success);
+  color: #10b981;
 }
 
 .eq-meta {
@@ -589,25 +773,145 @@ onMounted(() => {
 .eq-name {
   font-size: 0.9rem;
   font-weight: 600;
-  color: var(--text-main);
+  color: #1e293b;
   line-height: 1.2;
 }
 
 .eq-type-model {
   font-size: 0.75rem;
-  color: var(--text-muted);
+  color: #64748b;
   margin-top: 0.15rem;
 }
 
 .selected-summary {
   font-size: 0.85rem;
   font-weight: 700;
-  color: var(--text-muted);
+  color: #64748b;
   background: #f8fafc;
   padding: 0.75rem 1rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
   text-align: center;
+}
+
+/* User Select Styles */
+.user-select-wrapper {
+  position: relative;
+}
+
+.user-search-box {
+  position: relative;
+}
+
+.user-loading-icon {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #3b82f6;
+  font-size: 0.85rem;
+}
+
+.user-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+  z-index: 100;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.user-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.user-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.user-dropdown-item:hover {
+  background: #f1f5f9;
+}
+
+.user-dropdown-item.selected {
+  background: #eff6ff;
+}
+
+.user-item-icon {
+  color: #64748b;
+  font-size: 0.9rem;
+  width: 16px;
+}
+
+.user-item-meta {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.user-item-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.user-item-login {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.user-check-icon {
+  color: #3b82f6;
+  font-size: 0.85rem;
+}
+
+.user-dropdown-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.selected-user-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  background: #eff6ff;
+  color: #3b82f6;
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  border: 1px solid rgba(59, 130, 246, 0.2);
+}
+
+.clear-user-btn {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.clear-user-btn:hover {
+  opacity: 1;
 }
 
 /* Cost Section Styles */
@@ -617,14 +921,61 @@ onMounted(() => {
   justify-content: center;
   padding: 0.75rem 1rem;
   background: #f8fafc;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
   height: 42px;
 }
 
 .total-value {
   font-size: 1.1rem;
   font-weight: 700;
-  color: var(--success);
+  color: #10b981;
+}
+
+/* Alert Messages */
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.alert-success {
+  background: #f0fdf4;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+
+.alert-error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+/* Page Header */
+.page-header {
+  margin-bottom: 2rem;
+}
+
+.page-title {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 0.25rem;
+}
+
+.page-subtitle {
+  color: #64748b;
+}
+
+.card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 </style>

@@ -13,6 +13,12 @@
       </div>
     </header>
 
+    <!-- Erreur de session -->
+    <div v-if="sessionError" class="session-error-banner">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      {{ sessionError }}
+    </div>
+
     <!-- Elements Section -->
     <div class="section-container">
       <h2 class="section-title">
@@ -107,23 +113,29 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getTickets, getComputers, getMonitors, getPhones } from '../../services/backoffice/glpi.service'
+import { getTickets, getComputers, getMonitors, getPhones, ensureSession } from '../../services/backoffice/glpi.service'
 
 const tickets = ref([])
 const computers = ref([])
 const monitors = ref([])
 const phones = ref([])
 const loading = ref(false)
+const sessionError = ref(null)
 
 async function loadAll() {
   loading.value = true
+  sessionError.value = null
   try {
     console.log('📊 Récupération des données de GLPI pour le Dashboard...')
+
+    // ✅ Initialise / renouvelle la session GLPI avant toute requête
+    await ensureSession()
+
     const [t, c, m, p] = await Promise.all([
-      getTickets().catch(() => []),
-      getComputers().catch(() => []),
-      getMonitors().catch(() => []),
-      getPhones().catch(() => [])
+      getTickets().catch((e) => { console.error('❌ getTickets:', e.message); return [] }),
+      getComputers().catch((e) => { console.error('❌ getComputers:', e.message); return [] }),
+      getMonitors().catch((e) => { console.error('❌ getMonitors:', e.message); return [] }),
+      getPhones().catch((e) => { console.error('❌ getPhones:', e.message); return [] })
     ])
     tickets.value = Array.isArray(t) ? t : []
     computers.value = Array.isArray(c) ? c : []
@@ -135,7 +147,8 @@ async function loadAll() {
     console.log(`- Moniteurs: ${monitors.value.length}`)
     console.log(`- Téléphones: ${phones.value.length}`)
   } catch (e) {
-    console.error('Error fetching dashboard stats:', e)
+    console.error('❌ Erreur session ou Dashboard:', e.message)
+    sessionError.value = 'Impossible de se connecter à GLPI. Vérifiez votre session.'
   } finally {
     loading.value = false
   }
@@ -312,6 +325,19 @@ onMounted(() => {
 
 .icon-blue {
   color: #3b82f6;
+}
+
+.session-error-banner {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  border-radius: var(--radius-lg);
+  padding: 0.875rem 1.25rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
 }
 
 /* Status Cards */

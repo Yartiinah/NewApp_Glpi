@@ -23,6 +23,10 @@
           <span class="nav-icon">🎫</span>
           <span>Gestion Tickets</span>
         </router-link>
+        <router-link to="/admin/kanban-config" class="nav-link" active-class="active">
+          <span class="nav-icon">🎨</span>
+          <span>Config Kanban</span>
+        </router-link>
         <router-link to="/admin/reset" class="nav-link" active-class="active">
           <span class="nav-icon">🗑️</span>
           <span>Réinitialisation</span>

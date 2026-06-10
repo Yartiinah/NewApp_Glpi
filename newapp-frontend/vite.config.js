@@ -11,10 +11,10 @@ export default defineConfig({
         changeOrigin: true
       },
       '/glpi': {
-        target: 'http://127.0.0.1:80',
+        target: 'http://localhost',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/glpi/, '/apirest.php')
+        rewrite: (path) => path
       }
     }
   }

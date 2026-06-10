@@ -9,6 +9,9 @@ export const glpiClient = axios.create({
   headers: { 'Content-Type': 'application/json', 'App-Token': APP_TOKEN }
 })
 
+// Durée de session : 5 jours (en millisecondes)
+const SESSION_DURATION_MS = 5 * 24 * 60 * 60 * 1000 // 432000000 ms
+
 let sessionToken = null
 
 // Restaure la session depuis localStorage si encore valide
@@ -72,9 +75,10 @@ async function _doInitSession() {
     })
     sessionToken = response.data.session_token
     localStorage.setItem('glpi_session_token', sessionToken)
-    localStorage.setItem('glpi_session_expiry', (Date.now() + 3600000).toString())
+    const expiryTime = Date.now() + SESSION_DURATION_MS
+    localStorage.setItem('glpi_session_expiry', expiryTime.toString())
     localStorage.removeItem('glpi_mock_mode')
-    console.log('✅ Session GLPI initialisée')
+    console.log('✅ Session GLPI initialisée (backoffice), expire le', new Date(expiryTime).toLocaleString())
     return sessionToken
   } catch (err) {
     console.error('❌ Erreur connexion GLPI:', err.message)
@@ -83,20 +87,24 @@ async function _doInitSession() {
 }
 
 export async function ensureSession() {
+  // Vérifier si la session a expiré dans localStorage
+  const expiry = localStorage.getItem('glpi_session_expiry')
+  if (expiry && Date.now() > parseInt(expiry)) {
+    console.log('🔄 Session GLPI expirée, renouvellement automatique...')
+    localStorage.removeItem('glpi_session_token')
+    localStorage.removeItem('glpi_session_expiry')
+    sessionToken = null
+  }
   if (!sessionToken) await initSessionWithUserToken()
 }
 
 // =============================================
-// PAGINATION — CORRECTION PRINCIPALE
-// GLPI peut renvoyer un tableau OU un objet numéroté {0:{...}, 1:{...}}
-// On normalise toujours en tableau avant de traiter.
+// PAGINATION (CORRIGÉE POUR L'API GLPI)
 // =============================================
 function normalizeGlpiResponse(data) {
   if (!data) return []
   if (Array.isArray(data)) return data
-  // GLPI retourne parfois un objet avec des clés numériques
   const values = Object.values(data)
-  // Filtre les entrées de metadata GLPI (ex: {count: 5} sans "id")
   return values.filter(v => v && typeof v === 'object' && 'id' in v)
 }
 
@@ -109,11 +117,14 @@ export async function fetchPaginated(itemtype, extraParams = {}) {
   while (true) {
     let res
     try {
+      // CORRECTION : Le paramètre 'range' est déplacé de 'params' vers 'headers'
       res = await glpiClient.get(`/${itemtype}`, {
-        params: { range: `${offset}-${offset + limit - 1}`, ...extraParams }
+        params: extraParams,
+        headers: {
+          'Range': `${offset}-${offset + limit - 1}`
+        }
       })
     } catch (err) {
-      // 404 = table vide ou inexistante → retourne tableau vide
       if (err.response?.status === 404) break
       throw err
     }
@@ -142,7 +153,10 @@ export async function getTickets() {
   await ensureSession()
   try {
     return await fetchPaginated('Ticket', { sort: 'id', order: 'DESC', is_deleted: '0' })
-  } catch (err) { console.error('❌ getTickets:', err.message); throw err }
+  } catch (err) { 
+    console.error('❌ getTickets:', err.message)
+    return [] 
+  }
 }
 
 export async function getTicket(id) {
@@ -151,6 +165,32 @@ export async function getTicket(id) {
   catch (err) { console.error('❌ getTicket:', err.message); throw err }
 }
 
+export async function createTicket(data) {
+  if (isMockActive()) {
+    const list = getMockData('tickets')
+    const newId = list.length ? Math.max(...list.map(t => t.id)) + 1 : 1
+    const newTicket = {
+      id: newId,
+      name: data.name,
+      content: data.content,
+      status: data.status || 1,
+      priority: data.priority || 3,
+      date_creation: new Date().toISOString().replace('T', ' ').substring(0, 19),
+      is_deleted: 0
+    }
+    list.unshift(newTicket)
+    setMockData('tickets', list)
+    return { id: newId }
+  }
+  await ensureSession()
+  try {
+    console.log('📝 Création ticket GLPI:', data.name)
+    return (await glpiClient.post('/Ticket', { input: data })).data
+  } catch (err) { 
+    console.error('❌ createTicket:', err.response?.data || err.message)
+    throw err 
+  }
+}
 
 export async function deleteTicket(id, forcePurge = false) {
   await ensureSession()
@@ -169,7 +209,7 @@ export async function updateTicket(id, data) {
 
 export function extractTicketRef(content) {
   if (!content) return null
-  const match = content.match(/<!--\s*REF_TICKET:([^>]+)\s*-->/)
+  const match = content.match(/<!-- REF_TICKET:(.*?) -->/)
   return match ? match[1].trim() : null
 }
 
@@ -181,13 +221,12 @@ export async function getComputers() {
   if (isMockActive()) return getMockData('computers').filter(c => !c.is_deleted)
   await ensureSession()
   try {
-    // forcedisplay force GLPI à retourner le champ picture_front dans la liste
-    return await fetchPaginated('Computer', {
-      is_deleted: '0',
-      'forcedisplay[0]': 80,   // id du champ picture_front dans GLPI
-    })
+    return await fetchPaginated('Computer', { is_deleted: '0' })
   }
-  catch (err) { console.error('❌ getComputers:', err.message); throw err }
+  catch (err) { 
+    console.error('❌ getComputers:', err.message)
+    return [] 
+  }
 }
 
 export async function getComputer(id) {
@@ -201,7 +240,8 @@ export async function createComputer(data) {
     const list = getMockData('computers')
     const id = list.length ? Math.max(...list.map(c => c.id)) + 1 : 101
     const item = { id, ...data, is_deleted: 0 }
-    list.push(item); setMockData('computers', list)
+    list.push(item)
+    setMockData('computers', list)
     return item
   }
   await ensureSession()
@@ -217,7 +257,10 @@ export async function createComputer(data) {
     if (data.computermodels_id) payload.computermodels_id = data.computermodels_id
     if (data.users_id) payload.users_id = data.users_id
     return (await glpiClient.post('/Computer', { input: payload })).data
-  } catch (err) { console.error('❌ createComputer:', err.response?.data || err.message); throw err }
+  } catch (err) { 
+    console.error('❌ createComputer:', err.response?.data || err.message)
+    throw err 
+  }
 }
 
 export async function deleteComputer(id, forcePurge = false) {
@@ -235,28 +278,12 @@ export async function getMonitors() {
   if (isMockActive()) return getMockData('monitors').filter(m => !m.is_deleted)
   await ensureSession()
   try {
-    return await fetchPaginated('Monitor', {
-      is_deleted: '0',
-      'forcedisplay[0]': 80,
-    })
+    return await fetchPaginated('Monitor', { is_deleted: '0' })
   }
-  catch (err) { console.error('❌ getMonitors:', err.message); throw err }
-}
-
-// =============================================
-// TÉLÉPHONES
-// =============================================
-
-export async function getPhones() {
-  if (isMockActive()) return getMockData('phones')?.filter(p => !p.is_deleted) || []
-  await ensureSession()
-  try {
-    return await fetchPaginated('Phone', {
-      is_deleted: '0',
-      'forcedisplay[0]': 80,
-    })
+  catch (err) { 
+    console.error('❌ getMonitors:', err.message)
+    return [] 
   }
-  catch (err) { console.error('❌ getPhones:', err.message); throw err }
 }
 
 export async function createMonitor(data) {
@@ -264,7 +291,8 @@ export async function createMonitor(data) {
     const list = getMockData('monitors')
     const id = list.length ? Math.max(...list.map(m => m.id)) + 1 : 201
     const item = { id, ...data, is_deleted: 0 }
-    list.push(item); setMockData('monitors', list)
+    list.push(item)
+    setMockData('monitors', list)
     return item
   }
   await ensureSession()
@@ -280,7 +308,10 @@ export async function createMonitor(data) {
     if (data.monitormodels_id) payload.monitormodels_id = data.monitormodels_id
     if (data.users_id) payload.users_id = data.users_id
     return (await glpiClient.post('/Monitor', { input: payload })).data
-  } catch (err) { console.error('❌ createMonitor:', err.response?.data || err.message); throw err }
+  } catch (err) { 
+    console.error('❌ createMonitor:', err.response?.data || err.message)
+    throw err 
+  }
 }
 
 export async function deleteMonitor(id, forcePurge = false) {
@@ -288,6 +319,22 @@ export async function deleteMonitor(id, forcePurge = false) {
   try {
     return (await glpiClient.delete(`/Monitor/${id}`, { params: forcePurge ? { force_purge: 1 } : {} })).data
   } catch (err) { console.error('❌ deleteMonitor:', err.message); throw err }
+}
+
+// =============================================
+// TÉLÉPHONES
+// =============================================
+
+export async function getPhones() {
+  if (isMockActive()) return getMockData('phones')?.filter(p => !p.is_deleted) || []
+  await ensureSession()
+  try {
+    return await fetchPaginated('Phone', { is_deleted: '0' })
+  }
+  catch (err) { 
+    console.error('❌ getPhones:', err.message)
+    return [] 
+  }
 }
 
 // =============================================
@@ -299,7 +346,16 @@ export async function getUsers() {
   await ensureSession()
   try {
     return await fetchPaginated('User', { is_deleted: '0' })
-  } catch (err) { console.error('❌ getUsers:', err.message); throw err }
+  } catch (err) { 
+    console.error('❌ getUsers:', err.message)
+    return [] 
+  }
+}
+
+export async function getUser(id) {
+  await ensureSession()
+  try { return (await glpiClient.get(`/User/${id}`)).data }
+  catch (err) { console.error('❌ getUser:', err.message); throw err }
 }
 
 export async function createUser(data) {
@@ -312,7 +368,8 @@ export async function createUser(data) {
     if (existing) return { id: existing.id }
     const id = list.length ? Math.max(...list.map(u => u.id)) + 1 : 2
     const user = { id, name: data.name, realname: data.realname || data.name, is_deleted: 0 }
-    list.push(user); setMockData('users', list)
+    list.push(user)
+    setMockData('users', list)
     return user
   }
   await ensureSession()
@@ -321,7 +378,10 @@ export async function createUser(data) {
     const payload = { name: data.name }
     if (data.realname) payload.realname = data.realname
     return (await glpiClient.post('/User', { input: payload })).data
-  } catch (err) { console.error('❌ createUser:', err.response?.data || err.message); throw err }
+  } catch (err) { 
+    console.error('❌ createUser:', err.response?.data || err.message)
+    throw err 
+  }
 }
 
 export async function deleteUser(id) {
@@ -335,7 +395,7 @@ export async function deleteUser(id) {
 }
 
 // =============================================
-// LOOKUP TABLES (State, Location, Manufacturer, Model)
+// LOOKUP TABLES
 // =============================================
 
 const lookupCaches = { State: {}, Location: {}, Manufacturer: {}, ComputerModel: {}, MonitorModel: {} }
@@ -361,12 +421,23 @@ async function findOrCreateLookup(itemtype, name) {
   if (lookupCaches[itemtype][n]) return { id: lookupCaches[itemtype][n], created: false }
   const list = await getLookupList(itemtype)
   const existing = list.find(i => norm(i.name) === n)
-  if (existing) { lookupCaches[itemtype][n] = existing.id; return { id: existing.id, created: false } }
+  if (existing) { 
+    lookupCaches[itemtype][n] = existing.id
+    return { id: existing.id, created: false }
+  }
   await ensureSession()
-  const res = await glpiClient.post(`/${itemtype}`, { input: { name: name.trim() } })
-  const id = res.data?.id
-  if (id) { lookupCaches[itemtype][n] = id; if (lookupListCaches[itemtype]) lookupListCaches[itemtype].push({ id, name: name.trim() }) }
-  return { id: id || null, created: true }
+  try {
+    const res = await glpiClient.post(`/${itemtype}`, { input: { name: name.trim() } })
+    const id = res.data?.id
+    if (id) { 
+      lookupCaches[itemtype][n] = id
+      if (lookupListCaches[itemtype]) lookupListCaches[itemtype].push({ id, name: name.trim() })
+    }
+    return { id: id || null, created: true }
+  } catch (err) {
+    console.error(`❌ Création lookup ${itemtype}/${name} échouée:`, err.message)
+    return { id: null, created: false }
+  }
 }
 
 const STATE_ALIASES = {
@@ -404,56 +475,116 @@ export async function countItems(itemtype, extraParams = {}) {
 }
 
 // =============================================
-// ÉLÉMENTS MIXTES
-// =============================================
-
-
-// =============================================
 // LIENS ET COÛTS
 // =============================================
 
-
-export async function addTicketCost(ticketId, costData) {
+export async function linkItemToTicket(ticketId, itemtype, itemId) {
   await ensureSession()
   try {
-    return (await glpiClient.post('/TicketCost', {
-      input: {
-        tickets_id: ticketId,
-        name: 'Coût CSV',
-        duration:   costData.duration   || 0,
-        cost_time:  costData.cost_time  || 0,
-        cost_fixed: costData.cost_fixed || 0
-      }
+    return (await glpiClient.post('/Item_Ticket', {
+      input: { tickets_id: ticketId, itemtype: itemtype, items_id: itemId }
     })).data
-  } catch (err) { console.error('❌ addTicketCost:', err.message); throw err }
+  } catch (err) { 
+    console.error('❌ linkItemToTicket:', err.message)
+    throw err 
+  }
+}
+
+export async function addTicketCost(ticketId, costData) {
+  if (isMockActive()) {
+    const costs = getMockData('ticket_costs')
+    if (!costs[ticketId]) costs[ticketId] = []
+    const newId = Math.floor(Math.random() * 1000)
+    costs[ticketId].push({
+      id: newId,
+      name: costData.name || 'Coût CSV',
+      duration: costData.actiontime || costData.duration || 0,
+      cost_time: costData.cost_time || 0,
+      cost_fixed: costData.cost_fixed || 0
+    })
+    setMockData('ticket_costs', costs)
+    return { id: newId }
+  }
+
+  await ensureSession()
+  try {
+    const duration = costData.actiontime || costData.duration || 0
+    const costTime = costData.cost_time || 0
+    const costFixed = costData.cost_fixed || 0
+    const name = costData.name || 'Coût CSV'
+    
+    console.log(`💰 Ajout coût ticket ${ticketId}: durée=${duration}s, cost_time=${costTime}, cost_fixed=${costFixed}`)
+    
+    const res = await glpiClient.post('/TicketCost', {
+      input: {
+        tickets_id: parseInt(ticketId),
+        name: name,
+        duration: parseInt(duration),
+        cost_time: parseFloat(costTime),
+        cost_fixed: parseFloat(costFixed)
+      }
+    })
+    console.log('✅ Coût ajouté avec succès:', res.data)
+    return res.data
+  } catch (err) { 
+    console.error('❌ addTicketCost:', err.response?.data || err.message)
+    throw err 
+  }
 }
 
 export async function getTicketCosts(ticketId) {
+  if (isMockActive()) {
+    const costs = getMockData('ticket_costs')
+    return costs[ticketId] || []
+  }
   await ensureSession()
-  try { return (await glpiClient.get(`/Ticket/${ticketId}/TicketCost`)).data }
-  catch { return [] }
+  try { 
+    const res = await glpiClient.get(`/Ticket/${ticketId}/TicketCost`)
+    return normalizeGlpiResponse(res.data)
+  } catch { 
+    return [] 
+  }
 }
 
 export async function deleteTicketCost(id) {
   await ensureSession()
-  try { return (await glpiClient.delete(`/TicketCost/${id}`, { params: { force_purge: '1' } })).data }
-  catch (err) { console.error('❌ deleteTicketCost:', err.message); throw err }
+  try { 
+    return (await glpiClient.delete(`/TicketCost/${id}`, { params: { force_purge: '1' } })).data 
+  }
+  catch (err) { 
+    console.error('❌ deleteTicketCost:', err.message)
+    throw err 
+  }
 }
 
 export async function getTicketItems(ticketId) {
   await ensureSession()
-  try { return (await glpiClient.get(`/Ticket/${ticketId}/Item_Ticket`)).data }
-  catch { return [] }
+  try { 
+    const res = await glpiClient.get(`/Ticket/${ticketId}/Item_Ticket`)
+    return normalizeGlpiResponse(res.data)
+  }
+  catch { 
+    return [] 
+  }
 }
 
 export async function deleteItemTicket(id) {
   await ensureSession()
-  try { return (await glpiClient.delete(`/Item_Ticket/${id}`, { params: { force_purge: '1' } })).data }
-  catch (err) { console.error('❌ deleteItemTicket:', err.message); throw err }
+  try { 
+    return (await glpiClient.delete(`/Item_Ticket/${id}`, { params: { force_purge: '1' } })).data 
+  }
+  catch (err) { 
+    console.error('❌ deleteItemTicket:', err.message)
+    throw err 
+  }
 }
 
 export function disableMockMode() {
   localStorage.removeItem('glpi_mock_mode')
+  localStorage.removeItem('glpi_session_token')
+  localStorage.removeItem('glpi_session_expiry')
+  sessionToken = null
+  console.log('✅ Mode Mock désactivé')
 }
 
 export default glpiClient

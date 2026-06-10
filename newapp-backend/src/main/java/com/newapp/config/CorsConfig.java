@@ -14,9 +14,8 @@ public class CorsConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/api/**")
-                        // Autorise le frontend Vue.js (Vite tourne sur :5173)
                         .allowedOrigins("http://localhost:5173")
-                        .allowedMethods("GET", "POST", "DELETE", "OPTIONS")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                         .allowedHeaders("*");
             }
         };

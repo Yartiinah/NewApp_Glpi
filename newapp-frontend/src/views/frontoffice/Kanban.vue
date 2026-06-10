@@ -22,7 +22,10 @@
         @drop="onDrop($event, column.id)"
       >
         <div class="column-header">
-          <h3 class="column-title">{{ column.name }}</h3>
+          <div class="column-title-block">
+            <h3 class="column-title">{{ column.name }}</h3>
+            <span class="column-title-mg">{{ column.nameMg }}</span>
+          </div>
           <span class="column-count">{{ getTicketsByStatus(column.status).length }}</span>
         </div>
         
@@ -94,6 +97,27 @@
               </select>
             </div>
           </div>
+
+          <!-- ⭐ DEMANDEUR (USER) - Version liste déroulante ⭐ -->
+          <div class="form-group">
+            <label class="form-label">
+              <i class="fa-solid fa-user"></i> Demandeur (optionnel)
+            </label>
+            <select v-model="selectedUserId" class="form-select" :disabled="loadingUsers">
+              <option :value="null">-- Sélectionner un utilisateur --</option>
+              <option 
+                v-for="user in users" 
+                :key="user.id" 
+                :value="user.id"
+              >
+                {{ user.realname || user.name }} ({{ user.name }})
+              </option>
+            </select>
+            <div v-if="selectedUserId" class="form-hint">
+              <i class="fa-solid fa-user-check"></i> Demandeur sélectionné
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Description *</label>
             <textarea v-model="newTicket.description" class="form-textarea" required rows="4" placeholder="Description du ticket"></textarea>
@@ -173,7 +197,10 @@
 
           <div class="dialog-actions">
             <button type="button" @click="showCreateDialog = false" class="btn btn-secondary">Annuler</button>
-            <button type="submit" class="btn btn-primary">Créer</button>
+            <button type="submit" :disabled="submitting" class="btn btn-primary">
+              <i class="fa-solid" :class="submitting ? 'fa-spinner fa-spin' : 'fa-paper-plane'"></i>
+              {{ submitting ? 'Création...' : 'Créer' }}
+            </button>
           </div>
         </form>
       </div>
@@ -181,14 +208,18 @@
 
     <!-- Ticket Details Dialog -->
     <div v-if="showDetailsDialog" class="dialog-overlay" @click="showDetailsDialog = false">
-      <div class="dialog-content" @click.stop>
+      <div class="dialog-content dialog-content-large" @click.stop>
         <div class="dialog-header">
           <h3>Détails du ticket #{{ selectedTicket?.id }}</h3>
           <button @click="showDetailsDialog = false" class="dialog-close">
             <i class="fa-solid fa-times"></i>
           </button>
         </div>
-        <div v-if="selectedTicket" class="ticket-details">
+        <div v-if="loadingTicketDetails" class="ticket-details-loading">
+          <i class="fa-solid fa-spinner fa-spin"></i>
+          <span>Chargement des détails...</span>
+        </div>
+        <div v-else-if="selectedTicket" class="ticket-details">
           <div class="detail-row">
             <span class="detail-label">Titre:</span>
             <span class="detail-value">{{ selectedTicket.name }}</span>
@@ -201,13 +232,54 @@
             <span class="detail-label">Priorité:</span>
             <span class="detail-value">{{ getPriorityLabel(selectedTicket.priority) }}</span>
           </div>
+          <div class="detail-row" v-if="selectedTicket._users_id_requester">
+            <span class="detail-label">Demandeur:</span>
+            <span class="detail-value">{{ getRequesterName(selectedTicket._users_id_requester) }}</span>
+          </div>
           <div class="detail-row">
             <span class="detail-label">Date de création:</span>
             <span class="detail-value">{{ formatDate(selectedTicket.date_creation || selectedTicket.date) }}</span>
           </div>
+          <div class="detail-row" v-if="selectedTicket.date_mod">
+            <span class="detail-label">Date de modification:</span>
+            <span class="detail-value">{{ formatDate(selectedTicket.date_mod) }}</span>
+          </div>
           <div class="detail-row full-width">
             <span class="detail-label">Description:</span>
             <p class="detail-value">{{ selectedTicket.content }}</p>
+          </div>
+
+          <!-- Cost Section -->
+          <div class="detail-section" v-if="ticketCosts.length > 0">
+            <h4 class="detail-section-title">Coûts associés</h4>
+            <div class="costs-list">
+              <div v-for="cost in ticketCosts" :key="cost.id" class="cost-item">
+                <div class="cost-name">{{ cost.name || 'Coût' }}</div>
+                <div class="cost-details">
+                  <span v-if="cost.duration">Durée: {{ cost.duration }} min</span>
+                  <span v-if="cost.cost_time">Coût temps: {{ parseFloat(cost.cost_time).toFixed(2) }} €</span>
+                  <span v-if="cost.cost_fixed">Coût fixe: {{ parseFloat(cost.cost_fixed).toFixed(2) }} €</span>
+                </div>
+                <div class="cost-total">
+                  {{ ((parseFloat(cost.cost_time) || 0) + (parseFloat(cost.cost_fixed) || 0)).toFixed(2) }} €
+                </div>
+              </div>
+            </div>
+            <div class="total-cost-row">
+              <span class="total-cost-label">Total des coûts:</span>
+              <span class="total-cost-value">{{ totalTicketCost.toFixed(2) }} €</span>
+            </div>
+          </div>
+
+          <!-- Linked Equipment Section -->
+          <div class="detail-section" v-if="ticketLinkedItems.length > 0">
+            <h4 class="detail-section-title">Équipements liés</h4>
+            <div class="linked-items-list">
+              <div v-for="item in ticketLinkedItems" :key="item.id" class="linked-item">
+                <span class="linked-item-type">{{ item.itemtype }}</span>
+                <span class="linked-item-id">#{{ item.items_id }}</span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="dialog-actions">
@@ -241,13 +313,39 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { createTicket as createTicketGLPI, getAllTickets, updateTicketStatus, getAllItems, linkItemToTicket, addTicketCost } from '../../services/frontoffice/glpi.service'
+import { 
+  createTicket as createTicketGLPI, 
+  getAllTickets, 
+  updateTicketStatus, 
+  getAllItems, 
+  linkItemToTicket, 
+  addTicketCost, 
+  getTicketCosts, 
+  getTicketLinkedItems, 
+  getTicketById,
+  getUsers 
+} from '../../services/frontoffice/glpi.service'
+import { getKanbanConfig } from '../../services/backoffice/kanbanConfig.service'
 
 const columns = ref([
-  { id: 'nouveau', name: 'Nouveau', status: 1, color: '#e0f2fe' },
-  { id: 'inprogress', name: 'In progress', status: 2, color: '#fef3c7' },
-  { id: 'termine', name: 'Terminé', status: 6, color: '#dcfce7' }
+  { id: 'nouveau',    name: 'Nouveau',     nameMg: 'vaovao',    status: 1, color: '#e0f2fe' },
+  { id: 'inprogress', name: 'In progress', nameMg: 'efa manao', status: 2, color: '#fef3c7' },
+  { id: 'termine',    name: 'Terminé',     nameMg: 'vita',      status: 6, color: '#dcfce7' }
 ])
+
+async function loadKanbanConfig() {
+  try {
+    const cfg = await getKanbanConfig()
+    columns.value = columns.value.map(col => ({
+      ...col,
+      color:  cfg[`column_${col.id}_color`]  || col.color,
+      name:   cfg[`column_${col.id}_name_fr`] || col.name,
+      nameMg: cfg[`column_${col.id}_name_mg`] || col.nameMg
+    }))
+  } catch (err) {
+    console.warn('⚠️ Config kanban non disponible, valeurs par défaut utilisées:', err.message)
+  }
+}
 
 const tickets = ref([])
 const showCreateDialog = ref(false)
@@ -257,6 +355,24 @@ const selectedTicket = ref(null)
 const draggedTicket = ref(null)
 const targetStatus = ref(null)
 const statusChangeComment = ref('')
+const submitting = ref(false)
+
+// Ticket details additional data
+const ticketCosts = ref([])
+const ticketLinkedItems = ref([])
+const loadingTicketDetails = ref(false)
+
+// User fields - Version simple avec select
+const users = ref([])
+const loadingUsers = ref(false)
+const selectedUserId = ref(null)
+
+// Computed pour afficher le nom du demandeur sélectionné
+const selectedUserDisplay = computed(() => {
+  if (!selectedUserId.value) return ''
+  const user = users.value.find(u => u.id === selectedUserId.value)
+  return user ? (user.realname || user.name) : ''
+})
 
 const newTicket = ref({
   title: '',
@@ -300,6 +416,20 @@ async function fetchEquipments() {
   }
 }
 
+async function fetchUsers() {
+  loadingUsers.value = true
+  try {
+    const data = await getUsers()
+    users.value = Array.isArray(data) ? data : []
+    console.log('👥 Utilisateurs chargés:', users.value.length)
+  } catch (err) {
+    console.error('Failed to load users:', err)
+    users.value = []
+  } finally {
+    loadingUsers.value = false
+  }
+}
+
 function getTicketsByStatus(status) {
   return tickets.value.filter(t => t.status === status)
 }
@@ -312,6 +442,20 @@ const filteredItems = computed(() => {
            (item.model && item.model.toLowerCase().includes(query)) ||
            (item.itemtype && item.itemtype.toLowerCase().includes(query))
   })
+})
+
+function getRequesterName(userId) {
+  if (!userId) return ''
+  const user = users.value.find(u => u.id === userId)
+  return user ? (user.realname || user.name) : `ID: ${userId}`
+}
+
+const totalTicketCost = computed(() => {
+  return ticketCosts.value.reduce((total, cost) => {
+    const timeCost = parseFloat(cost.cost_time) || 0
+    const fixedCost = parseFloat(cost.cost_fixed) || 0
+    return total + timeCost + fixedCost
+  }, 0)
 })
 
 function calculateTotal() {
@@ -360,6 +504,7 @@ async function confirmStatusChange() {
 }
 
 async function createTicket() {
+  submitting.value = true
   try {
     const ticketPayload = {
       name: newTicket.value.title,
@@ -367,6 +512,11 @@ async function createTicket() {
       type: newTicket.value.type,
       priority: newTicket.value.priority,
       status: newTicket.value.status
+    }
+
+    // Ajouter l'utilisateur demandeur si sélectionné
+    if (selectedUserId.value) {
+      ticketPayload._users_id_requester = selectedUserId.value
     }
 
     const ticketRes = await createTicketGLPI(ticketPayload)
@@ -405,6 +555,7 @@ async function createTicket() {
     showCreateDialog.value = false
     newTicket.value = { title: '', description: '', priority: 3, type: 1, status: 1 }
     selectedItemIds.value = []
+    selectedUserId.value = null
     costDuration.value = ''
     costRate.value = ''
     costFixed.value = ''
@@ -413,12 +564,36 @@ async function createTicket() {
   } catch (err) {
     console.error('Failed to create ticket:', err)
     alert('Erreur lors de la création du ticket')
+  } finally {
+    submitting.value = false
   }
 }
 
-function showTicketDetails(ticket) {
+async function showTicketDetails(ticket) {
   selectedTicket.value = ticket
+  loadingTicketDetails.value = true
+  ticketCosts.value = []
+  ticketLinkedItems.value = []
   showDetailsDialog.value = true
+
+  try {
+    const [costs, linkedItems, fullTicket] = await Promise.all([
+      getTicketCosts(ticket.id).catch(() => []),
+      getTicketLinkedItems(ticket.id).catch(() => []),
+      getTicketById(ticket.id).catch(() => ticket)
+    ])
+
+    ticketCosts.value = costs
+    ticketLinkedItems.value = linkedItems
+
+    if (fullTicket && fullTicket.date_mod) {
+      selectedTicket.value = { ...ticket, ...fullTicket }
+    }
+  } catch (err) {
+    console.error('Failed to fetch ticket details:', err)
+  } finally {
+    loadingTicketDetails.value = false
+  }
 }
 
 function getPriorityClass(priority) {
@@ -470,10 +645,12 @@ function formatDate(dateStr) {
 }
 
 onMounted(() => {
-  // Disable mock mode to force GLPI data usage
   localStorage.removeItem('glpi_mock_mode')
+  loadKanbanConfig()
   fetchTickets()
   fetchEquipments()
+  fetchUsers()
+  window.addEventListener('kanban-config-updated', loadKanbanConfig)
 })
 </script>
 
@@ -519,11 +696,24 @@ onMounted(() => {
   border-bottom: 2px solid rgba(0, 0, 0, 0.1);
 }
 
+.column-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
 .column-title {
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--text-main);
   margin: 0;
+}
+
+.column-title-mg {
+  font-size: 0.72rem;
+  color: rgba(0,0,0,0.45);
+  font-style: italic;
+  font-weight: 500;
 }
 
 .column-count {
@@ -684,36 +874,6 @@ onMounted(() => {
   margin-top: 1.5rem;
 }
 
-/* Ticket Details */
-.ticket-details {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.detail-row {
-  display: flex;
-  gap: 1rem;
-}
-
-.detail-row.full-width {
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.detail-label {
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 120px;
-  font-size: 0.9rem;
-}
-
-.detail-value {
-  color: var(--text-main);
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
 /* Form Styles */
 .form-row {
   display: flex;
@@ -766,6 +926,16 @@ onMounted(() => {
 .form-textarea {
   resize: vertical;
   min-height: 80px;
+}
+
+/* Form Hint */
+.form-hint {
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 /* Form Section */
@@ -954,5 +1124,156 @@ onMounted(() => {
   font-size: 1rem;
   font-weight: 700;
   color: var(--success);
+}
+
+/* Ticket Details */
+.ticket-details-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: var(--text-muted);
+}
+
+.ticket-details-loading i {
+  font-size: 2rem;
+  color: var(--primary);
+}
+
+.ticket-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.detail-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.detail-row.full-width {
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-label {
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 140px;
+  font-size: 0.9rem;
+}
+
+.detail-value {
+  color: var(--text-main);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Detail Sections */
+.detail-section {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.detail-section-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 1rem 0;
+}
+
+/* Cost List */
+.costs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.cost-item {
+  background: white;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.cost-name {
+  font-weight: 600;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.cost-details {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.cost-details span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cost-total {
+  font-weight: 700;
+  color: var(--success);
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.total-cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 0.75rem;
+  border-top: 2px solid var(--border);
+}
+
+.total-cost-label {
+  font-weight: 700;
+  color: var(--text-main);
+  font-size: 0.95rem;
+}
+
+.total-cost-value {
+  font-weight: 700;
+  color: var(--success);
+  font-size: 1.1rem;
+}
+
+/* Linked Items List */
+.linked-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.linked-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: white;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.linked-item-type {
+  font-weight: 600;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.linked-item-id {
+  font-size: 0.8rem;
+  color: var(--text-muted);
 }
 </style>
