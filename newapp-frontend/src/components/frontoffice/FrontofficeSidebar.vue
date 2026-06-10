@@ -14,9 +14,9 @@
           <span class="nav-icon">💻</span>
           <span>Recherche Éléments</span>
         </router-link>
-        <router-link to="/create-ticket" class="nav-link" active-class="active">
-          <span class="nav-icon">➕</span>
-          <span>Créer un Ticket</span>
+        <router-link to="/kanban" class="nav-link" active-class="active">
+          <span class="nav-icon">📋</span>
+          <span>Ajout Ticket</span>
         </router-link>
       </div>
     </nav>

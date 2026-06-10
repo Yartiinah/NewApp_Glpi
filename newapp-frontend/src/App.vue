@@ -25,7 +25,7 @@ const showBackofficeSidebar = computed(() => {
 
 const showFrontofficeSidebar = computed(() => {
   // Show frontoffice sidebar on frontoffice routes (no auth required)
-  return route.path.startsWith('/elements') || route.path.startsWith('/create-ticket')
+  return route.path.startsWith('/elements') || route.path.startsWith('/create-ticket') || route.path.startsWith('/kanban')
 })
 </script>
 

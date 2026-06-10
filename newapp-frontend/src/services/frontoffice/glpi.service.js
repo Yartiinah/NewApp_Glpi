@@ -272,3 +272,44 @@ export async function addTicketCost(ticketId, costData) {
     })).data
   } catch (err) { console.error('❌ addTicketCost:', err.message); throw err }
 }
+
+// =============================================
+// RÉCUPÉRATION ET MISE À JOUR DES TICKETS
+// =============================================
+
+export async function getAllTickets() {
+  if (isMockActive()) return getMockData('tickets')
+  await ensureSession()
+  try {
+    return await fetchPaginated('Ticket', {
+      is_deleted: '0',
+      'forcedisplay[0]': 80,
+    })
+  }
+  catch (err) { console.error('❌ getAllTickets:', err.message); throw err }
+}
+
+export async function updateTicketStatus(ticketId, newStatus, comment = '') {
+  await ensureSession()
+  try {
+    const payload = {
+      input: {
+        id: ticketId,
+        status: newStatus
+      }
+    }
+    
+    // Ajouter un suivi si un commentaire est fourni
+    if (comment) {
+      await glpiClient.post('/ITILFollowup', {
+        input: {
+          itemtype: 'Ticket',
+          items_id: ticketId,
+          content: comment
+        }
+      })
+    }
+    
+    return (await glpiClient.put(`/Ticket/${ticketId}`, payload)).data
+  } catch (err) { console.error('❌ updateTicketStatus:', err.response?.data || err.message); throw err }
+}

@@ -11,6 +11,7 @@ import BackofficeTickets from '../views/backoffice/Tickets.vue'
 // Importation des composants Frontoffice (public - URL séparée)
 import FrontofficeElements from '../views/frontoffice/Elements.vue'
 import FrontofficeCreateTicket from '../views/frontoffice/CreateTicket.vue'
+import FrontofficeKanban from '../views/frontoffice/Kanban.vue'
 
 // Définition des routes de l'application
 const routes = [
@@ -27,6 +28,11 @@ const routes = [
     path: '/create-ticket', // Création ticket (public - URL simple)
     name: 'FrontofficeCreateTicket', 
     component: FrontofficeCreateTicket 
+  },
+  { 
+    path: '/kanban', // Tableau Kanban (public - URL simple)
+    name: 'FrontofficeKanban', 
+    component: FrontofficeKanban 
   },
   // Redirections pour les anciennes URLs (compatibilité)
   { 
