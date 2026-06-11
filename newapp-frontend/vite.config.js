@@ -6,15 +6,25 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true
-      },
-      '/glpi': {
+      '/api.php': {
         target: 'http://localhost',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path
+        configure: (proxy) => {
+          proxy.on('error', (err, req) => {
+            console.log('[proxy /api.php] ❌ Erreur:', err.message, '→', req.url)
+          })
+          proxy.on('proxyReq', (proxyReq, req) => {
+            console.log('[proxy /api.php] →', req.method, req.url)
+          })
+          proxy.on('proxyRes', (proxyRes, req) => {
+            console.log('[proxy /api.php] ←', proxyRes.statusCode, req.url)
+          })
+        }
+      },
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true
       }
     }
   }

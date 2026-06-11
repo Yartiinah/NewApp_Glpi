@@ -14,8 +14,11 @@ console.log('  GLPI_URL:', GLPI_URL)
 // Récupérer la session existante (celle du backoffice)
 let sessionToken = localStorage.getItem('glpi_session_token')
 
+// S'assurer que baseURL se termine sans slash pour que les chemins relatifs fonctionnent
+const BASE_URL = GLPI_URL.endsWith('/') ? GLPI_URL.slice(0, -1) : GLPI_URL
+
 export const glpiClient = axios.create({
-  baseURL: GLPI_URL,
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json', 'App-Token': APP_TOKEN }
 })
 
@@ -46,13 +49,13 @@ export async function initSessionWithUserToken() {
 }
 
 async function _doInitSession() {
-  const apiUrl = `${GLPI_URL}/initSession`
+  const apiUrl = `${BASE_URL}/initSession`
   console.log('🔗 Appel API initSession (frontoffice):', apiUrl)
   
   try {
-    const response = await axios.get(apiUrl, {
+    // Utilise glpiClient (URL relative) pour passer par le proxy Vite
+    const response = await glpiClient.get('initSession', {
       headers: {
-        'Content-Type': 'application/json',
         'App-Token': APP_TOKEN,
         'Authorization': `user_token ${USER_TOKEN}`
       }
@@ -232,29 +235,6 @@ export async function getTicketById(ticketId) {
 }
 
 // =============================================
-// UTILISATEURS
-// =============================================
-
-export async function getUsers() {
-  await ensureSession()
-  try {
-    // Récupérer les utilisateurs (limite 500 pour éviter trop de données)
-    const res = await glpiClient.get('/User', {
-      params: {
-        range: '0-500',
-        is_deleted: '0'
-      }
-    })
-    let data = res.data
-    if (!Array.isArray(data)) data = Object.values(data || {})
-    return data.filter(u => u && typeof u.id === 'number')
-  } catch (err) {
-    console.error('❌ getUsers (frontoffice):', err.message)
-    return []
-  }
-}
-
-// =============================================
 // ÉLÉMENTS MIXTES (avec images)
 // =============================================
 
@@ -341,6 +321,20 @@ export async function getAllItems() {
   console.log(`🖼️ ${withImg}/${allItems.length} item(s) avec image`)
 
   return allItems
+}
+
+// =============================================
+// UTILISATEURS
+// =============================================
+
+export async function getUsers() {
+  await ensureSession()
+  try {
+    return await fetchPaginated('User', { is_deleted: '0' })
+  } catch (err) {
+    console.error('❌ getUsers (frontoffice):', err.message)
+    return []
+  }
 }
 
 // =============================================

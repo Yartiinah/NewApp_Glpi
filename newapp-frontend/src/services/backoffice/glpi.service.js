@@ -4,8 +4,10 @@ import { isMockActive, getMockData, setMockData } from './glpi.mock'
 const GLPI_URL  = import.meta.env.VITE_GLPI_URL
 const APP_TOKEN = import.meta.env.VITE_GLPI_APP_TOKEN
 
+const BASE_URL = GLPI_URL.endsWith('/') ? GLPI_URL.slice(0, -1) : GLPI_URL
+
 export const glpiClient = axios.create({
-  baseURL: GLPI_URL,
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json', 'App-Token': APP_TOKEN }
 })
 
@@ -66,7 +68,7 @@ export async function initSessionWithUserToken() {
 async function _doInitSession() {
   const USER_TOKEN = import.meta.env.VITE_GLPI_USER_TOKEN
   try {
-    const response = await axios.get(`${GLPI_URL}/initSession`, {
+    const response = await glpiClient.get('initSession', {
       headers: {
         'Content-Type': 'application/json',
         'App-Token': APP_TOKEN,
