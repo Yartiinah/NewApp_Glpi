@@ -7,7 +7,7 @@ import BackofficeDashboard from '../views/backoffice/Dashboard.vue'
 import BackofficeReset from '../views/backoffice/ResetData.vue'
 import BackofficeImport from '../views/backoffice/Import.vue'
 import BackofficeTickets from '../views/backoffice/Tickets.vue'
-import BackofficeKanbanConfig from '../views/backoffice/KanbanConfig.vue'
+import BackofficeKanbanConfig from '../views/backoffice/Kanbanconfig.vue'
 
 // Importation des composants Frontoffice (public - URL séparée)
 import FrontofficeElements from '../views/frontoffice/Elements.vue'

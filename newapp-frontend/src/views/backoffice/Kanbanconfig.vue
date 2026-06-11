@@ -1,193 +1,95 @@
 <template>
   <div class="kanban-cfg-page">
-    <header class="page-header">
-      <div class="header-left">
-        <h1 class="page-title">🎨 Configuration Kanban</h1>
-        <p class="page-subtitle">Personnalisez les couleurs et les noms des colonnes (français / malgache)</p>
-      </div>
-      <div class="header-right">
-        <button @click="saveAll" :disabled="saving || loading" class="btn btn-primary">
-          <i class="fa-solid" :class="saving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
-          <span>{{ saving ? 'sEnregistrement...' : 'Sauvegarder' }}</span>
-        </button>
-      </div>
+    <header class="cfg-header">
+      <h1>Configuration Kanban</h1>
+      <button @click="saveAll" :disabled="saving || loading" class="btn-save">
+        {{ saving ? 'Enregistrement...' : 'Sauvegarder' }}
+      </button>
     </header>
 
-    <!-- Alert -->
-    <transition name="fade">
-      <div v-if="alert.message" class="alert-banner" :class="alert.type">
-        <i class="fa-solid" :class="alert.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'"></i>
-        {{ alert.message }}
-      </div>
-    </transition>
+    <p v-if="alert.message" class="alert" :class="alert.type">{{ alert.message }}</p>
+    <p v-if="loading" class="muted">Chargement...</p>
 
-    <!-- Loading -->
-    <div v-if="loading" class="loading-state">
-      <i class="fa-solid fa-spinner fa-spin"></i>
-      <span>Chargement de la configuration...</span>
-    </div>
-
-    <div v-else class="columns-grid">
-      <div
-        v-for="col in columns"
-        :key="col.id"
-        class="column-card"
-        :style="{ borderTopColor: form[col.colorKey] }"
-      >
-        <!-- Preview header -->
-        <div class="column-preview" :style="{ backgroundColor: form[col.colorKey] }">
-          <span class="preview-label">Aperçu colonne</span>
-          <span class="preview-count">3</span>
+    <template v-else>
+      <div class="card">
+        <div class="row">
+          <label for="lang-select">Langue des titres</label>
+          <select id="lang-select" v-model="form.kanban_language">
+            <option v-for="lang in LANGUAGES" :key="lang.code" :value="lang.code">
+              {{ lang.label }}
+            </option>
+          </select>
         </div>
 
-        <div class="column-card-body">
-          <h3 class="column-card-title">
-            <span class="col-dot" :style="{ background: form[col.colorKey] }"></span>
-            {{ col.label }}
-          </h3>
-
-          <!-- Couleur -->
-          <div class="field-group">
-            <label class="field-label">
-              <i class="fa-solid fa-palette"></i> Couleur de fond
-            </label>
-            <div class="color-row">
-              <input
-                type="color"
-                v-model="form[col.colorKey]"
-                class="color-picker"
-                :title="'Couleur ' + col.label"
-              />
-              <input
-                type="text"
-                v-model="form[col.colorKey]"
-                class="color-text-input"
-                placeholder="#e0f2fe"
-                @input="validateHex(col.colorKey)"
-              />
-            </div>
-            <div class="color-presets">
-              <button
-                v-for="preset in colorPresets"
-                :key="preset"
-                class="color-preset-btn"
-                :style="{ backgroundColor: preset }"
-                :class="{ active: form[col.colorKey] === preset }"
-                @click="form[col.colorKey] = preset"
-                :title="preset"
-              ></button>
-            </div>
-          </div>
-
-          <!-- Nom FR -->
-          <div class="field-group">
-            <label class="field-label">
-              <span class="flag">🇫🇷</span> Nom en français
-            </label>
-            <input
-              type="text"
-              v-model="form[col.nameFrKey]"
-              class="field-input"
-              :placeholder="col.defaultFr"
-            />
-          </div>
-
-          <!-- Nom MG -->
-          <div class="field-group">
-            <label class="field-label">
-              <span class="flag">🇲🇬</span> Nom en malgache
-            </label>
-            <input
-              type="text"
-              v-model="form[col.nameMgKey]"
-              class="field-input"
-              :placeholder="col.defaultMg"
-            />
-          </div>
+        <div class="row" v-for="col in KANBAN_COLUMNS" :key="col.id">
+          <label>{{ labelFor(col) }}</label>
+          <input type="color" v-model="form[col.colorKey]" />
+          <input
+            type="text"
+            v-model="form[col.colorKey]"
+            class="hex"
+            placeholder="#e0f2fe"
+            @input="validateHex(col.colorKey)"
+          />
         </div>
       </div>
-    </div>
 
-    <!-- Live Preview -->
-    <div v-if="!loading" class="preview-section">
-      <h2 class="preview-section-title">👁️ Aperçu du tableau Kanban</h2>
-      <div class="kanban-preview-board">
+      <h2>Aperçu</h2>
+      <div class="preview">
         <div
-          v-for="col in columns"
+          v-for="col in KANBAN_COLUMNS"
           :key="col.id"
-          class="kanban-preview-col"
+          class="preview-col"
           :style="{ backgroundColor: form[col.colorKey] }"
         >
-          <div class="kanban-preview-header">
-            <span class="kanban-preview-name">{{ form[col.nameFrKey] || col.defaultFr }}</span>
-            <span class="kanban-preview-name-mg">{{ form[col.nameMgKey] || col.defaultMg }}</span>
-            <span class="kanban-preview-count">2</span>
-          </div>
-          <div class="kanban-preview-card">Ticket exemple #1</div>
-          <div class="kanban-preview-card">Ticket exemple #2</div>
+          {{ labelFor(col) }}
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { getKanbanConfig, saveKanbanConfig } from '../../services/backoffice/kanbanConfig.service'
+import { getKanbanConfig, saveKanbanConfig } from '../../services/backoffice/Kanbanconfig.service'
+
+// --- Statuts Kanban : langues, colonnes + libellés prédéfinis par langue ---
+const LANGUAGES = [
+  { code: 'fr', label: 'Français' },
+  { code: 'en', label: 'English' },
+  { code: 'mg', label: 'Malagasy' }
+]
+const KANBAN_COLUMNS = [
+  { id: 'nouveau',    status: 1, colorKey: 'column_nouveau_color',    defaultColor: '#e0f2fe' },
+  { id: 'inprogress', status: 2, colorKey: 'column_inprogress_color', defaultColor: '#fef3c7' },
+  { id: 'termine',    status: 6, colorKey: 'column_termine_color',    defaultColor: '#dcfce7' }
+]
+const STATUS_LABELS = {
+  fr: { 1: 'Nouveau', 2: 'En cours (attribué)', 6: 'Clos' },
+  en: { 1: 'New',     2: 'In progress (assigned)', 6: 'Closed' },
+  mg: { 1: 'Vaovao',  2: 'Efa manao',          6: 'Vita' }
+}
+const LANGUAGE_KEY = 'kanban_language'
+const DEFAULT_LANGUAGE = 'fr'
+function statusLabel(status, lang) {
+  const dict = STATUS_LABELS[lang] || STATUS_LABELS[DEFAULT_LANGUAGE]
+  return dict[status] || STATUS_LABELS[DEFAULT_LANGUAGE][status] || ''
+}
 
 const loading = ref(true)
 const saving  = ref(false)
 const alert   = reactive({ message: '', type: 'success' })
 
-const columns = [
-  {
-    id: 'nouveau',
-    label: 'Nouveau',
-    colorKey:  'column_nouveau_color',
-    nameFrKey: 'column_nouveau_name_fr',
-    nameMgKey: 'column_nouveau_name_mg',
-    defaultFr: 'Nouveau',
-    defaultMg: 'vaovao'
-  },
-  {
-    id: 'inprogress',
-    label: 'In Progress',
-    colorKey:  'column_inprogress_color',
-    nameFrKey: 'column_inprogress_name_fr',
-    nameMgKey: 'column_inprogress_name_mg',
-    defaultFr: 'In progress',
-    defaultMg: 'efa manao'
-  },
-  {
-    id: 'termine',
-    label: 'Terminé',
-    colorKey:  'column_termine_color',
-    nameFrKey: 'column_termine_name_fr',
-    nameMgKey: 'column_termine_name_mg',
-    defaultFr: 'Terminé',
-    defaultMg: 'vita'
-  }
-]
-
-const colorPresets = [
-  '#e0f2fe', '#dbeafe', '#ede9fe', '#fce7f3',
-  '#fef3c7', '#fef9c3', '#fed7aa', '#fecaca',
-  '#dcfce7', '#d1fae5', '#ccfbf1', '#cffafe',
-  '#f1f5f9', '#f8fafc', '#e2e8f0', '#fff7ed'
-]
-
-// Formulaire réactif
+// Formulaire réactif : langue + une couleur par statut
 const form = reactive({
-  column_nouveau_color:      '#e0f2fe',
-  column_inprogress_color:   '#fef3c7',
-  column_termine_color:      '#dcfce7',
-  column_nouveau_name_fr:    'Nouveau',
-  column_inprogress_name_fr: 'In progress',
-  column_termine_name_fr:    'Terminé',
-  column_nouveau_name_mg:    'vaovao',
-  column_inprogress_name_mg: 'efa manao',
-  column_termine_name_mg:    'vita'
+  [LANGUAGE_KEY]: DEFAULT_LANGUAGE,
+  ...Object.fromEntries(KANBAN_COLUMNS.map(c => [c.colorKey, c.defaultColor]))
 })
+
+// Libellé prédéfini d'une colonne dans la langue sélectionnée
+function labelFor(col) {
+  return statusLabel(col.status, form[LANGUAGE_KEY])
+}
 
 function showAlert(message, type = 'success') {
   alert.message = message
@@ -220,8 +122,7 @@ async function saveAll() {
   try {
     const updates = Object.entries(form).map(([key, value]) => ({ key, value }))
     await saveKanbanConfig(updates)
-    showAlert('✅ Configuration sauvegardée avec succès !')
-    // Notifie le Kanban frontoffice que la config a changé
+    showAlert('Configuration sauvegardée.')
     window.dispatchEvent(new CustomEvent('kanban-config-updated'))
   } catch (err) {
     console.error('❌ Erreur sauvegarde config kanban:', err.message)
@@ -235,241 +136,71 @@ onMounted(loadConfig)
 </script>
 
 <style scoped>
-.kanban-cfg-page {
-  max-width: 1200px;
-  margin: 0 auto;
-}
+.kanban-cfg-page { max-width: 640px; margin: 0 auto; }
 
-.page-header {
+.cfg-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 2rem;
+  align-items: center;
+  margin-bottom: 1.25rem;
 }
 
-/* Alert */
-.alert-banner {
+.btn-save {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-save:disabled { opacity: 0.6; cursor: default; }
+
+.muted { color: #64748b; }
+
+.alert { padding: 0.6rem 0.9rem; border-radius: 6px; margin-bottom: 1rem; }
+.alert.success { background: #f0fdf4; color: #15803d; }
+.alert.error { background: #fef2f2; color: #dc2626; }
+
+.card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1.25rem;
+  background: #fff;
+}
+
+.row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.9rem 1.25rem;
-  border-radius: var(--radius-md);
-  font-weight: 500;
-  margin-bottom: 1.5rem;
-  font-size: 0.9rem;
+  margin-bottom: 0.9rem;
 }
-.alert-banner.success {
-  background: #f0fdf4;
-  color: #15803d;
-  border: 1px solid #bbf7d0;
-}
-.alert-banner.error {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
-}
-.fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-/* Loading */
-.loading-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  padding: 4rem;
-  color: var(--text-muted);
-  font-size: 1rem;
-}
-.loading-state i { font-size: 1.5rem; color: var(--primary); }
-
-/* Columns grid */
-.columns-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1.5rem;
-  margin-bottom: 2.5rem;
-}
-@media (max-width: 900px) {
-  .columns-grid { grid-template-columns: 1fr; }
-}
-
-.column-card {
-  background: white;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  border-top: 4px solid #e2e8f0;
-  box-shadow: var(--shadow);
-  overflow: hidden;
-  transition: box-shadow 0.2s;
-}
-.column-card:hover { box-shadow: var(--shadow-lg); }
-
-.column-preview {
-  padding: 0.75rem 1rem;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  transition: background-color 0.3s;
-}
-.preview-label { font-size: 0.75rem; font-weight: 600; color: rgba(0,0,0,0.4); }
-.preview-count {
-  background: rgba(0,0,0,0.1);
-  padding: 0.15rem 0.6rem;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: rgba(0,0,0,0.5);
-}
-
-.column-card-body { padding: 1.25rem; }
-
-.column-card-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text-main);
-  margin-bottom: 1.25rem;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.col-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-  transition: background 0.3s;
-}
-
-.field-group { margin-bottom: 1rem; }
-.field-label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 0.45rem;
-}
-.flag { font-size: 1rem; }
-
-/* Color row */
-.color-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-.color-picker {
-  width: 42px;
-  height: 36px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  background: white;
-}
-.color-text-input {
-  flex: 1;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  font-family: monospace;
-  color: var(--text-main);
-}
-.color-text-input:focus { outline: none; border-color: var(--primary); }
-
-.color-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.color-preset-btn {
-  width: 20px;
-  height: 20px;
-  border-radius: 4px;
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: transform 0.15s, border-color 0.15s;
-}
-.color-preset-btn:hover { transform: scale(1.2); }
-.color-preset-btn.active { border-color: #1e293b; transform: scale(1.15); }
-
-.field-input {
-  width: 100%;
-  padding: 0.55rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
-  color: var(--text-main);
-  background: white;
-  transition: border-color 0.2s;
-}
-.field-input:focus { outline: none; border-color: var(--primary); }
-
-/* Preview board */
-.preview-section {
-  background: white;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 1.5rem;
-  box-shadow: var(--shadow);
-}
-.preview-section-title {
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--text-main);
-  margin-bottom: 1.25rem;
-}
-.kanban-preview-board {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
-}
-@media (max-width: 700px) {
-  .kanban-preview-board { grid-template-columns: 1fr; }
-}
-.kanban-preview-col {
-  border-radius: var(--radius-md);
-  padding: 0.75rem;
-  border: 1px solid rgba(0,0,0,0.06);
-  transition: background-color 0.3s;
-}
-.kanban-preview-header {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin-bottom: 0.75rem;
-  flex-wrap: wrap;
-}
-.kanban-preview-name {
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--text-main);
-}
-.kanban-preview-name-mg {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
-.kanban-preview-count {
-  margin-left: auto;
-  background: rgba(0,0,0,0.1);
-  padding: 0.1rem 0.5rem;
-  border-radius: 20px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--text-main);
-}
-.kanban-preview-card {
-  background: white;
+.row:last-child { margin-bottom: 0; }
+.row label { min-width: 170px; font-weight: 600; }
+.row select,
+.row input[type="text"] {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #cbd5e1;
   border-radius: 6px;
-  padding: 0.6rem 0.75rem;
-  margin-bottom: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  border: 1px solid rgba(0,0,0,0.06);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.row input[type="color"] {
+  width: 40px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.hex { width: 120px; font-family: monospace; }
+
+h2 { margin: 1.5rem 0 0.75rem; font-size: 1.05rem; }
+
+.preview { display: flex; gap: 0.75rem; }
+.preview-col {
+  flex: 1;
+  padding: 1rem 0.75rem;
+  border-radius: 6px;
+  font-weight: 700;
+  text-align: center;
 }
 </style>

@@ -4,6 +4,7 @@ com\newapp\model\DataRecord.class
 com\newapp\NewAppApplication.class
 com\newapp\controller\ResetController.class
 com\newapp\repository\DataRepository.class
+com\newapp\config\DatabaseInitializer.class
 com\newapp\service\ImportService.class
 com\newapp\service\DataService.class
 com\newapp\config\CorsConfig$1.class

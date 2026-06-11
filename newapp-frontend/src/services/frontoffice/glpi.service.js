@@ -183,16 +183,32 @@ export async function createTicket(data) {
   }
 }
 
+// =============================================
+// MISE À JOUR STATUT TICKET (VERSION SIMPLIFIÉE QUI FONCTIONNE)
+// =============================================
+
 export async function updateTicketStatus(ticketId, newStatus, comment = '') {
   await ensureSession()
   try {
-    const payload = { input: { id: ticketId, status: newStatus } }
-    if (comment) {
+    // 1. Mettre à jour le statut du ticket
+    const result = await glpiClient.put(`/Ticket/${ticketId}`, { 
+      input: { id: ticketId, status: newStatus } 
+    })
+    console.log(`✅ Statut du ticket ${ticketId} mis à jour vers ${newStatus}`)
+    
+    // 2. Ajouter le commentaire comme suivi (ITILFollowup) s'il existe
+    if (comment && comment.trim()) {
       await glpiClient.post('/ITILFollowup', {
-        input: { itemtype: 'Ticket', items_id: ticketId, content: comment }
+        input: {
+          itemtype: 'Ticket',
+          items_id: ticketId,
+          content: comment
+        }
       })
+      console.log(`✅ Commentaire ajouté au ticket ${ticketId}`)
     }
-    return (await glpiClient.put(`/Ticket/${ticketId}`, payload)).data
+    
+    return result.data
   } catch (err) { 
     console.error('❌ updateTicketStatus:', err.response?.data || err.message)
     throw err 
@@ -211,7 +227,7 @@ export async function getTicketById(ticketId) {
 }
 
 // =============================================
-// COÛTS DES TICKETS (CORRIGÉ)
+// COÛTS DES TICKETS
 // =============================================
 
 export async function getTicketCosts(ticketId) {
@@ -247,13 +263,10 @@ export async function getTicketLinkedItems(ticketId) {
 export async function addTicketCost(ticketId, costData) {
   await ensureSession()
   try {
-    // Calcul correct du coût temps
-    // duration est en minutes, cost_time est le taux horaire
     const durationMinutes = costData.duration || 0
     const ratePerHour = costData.cost_time || 0
     const fixedCost = costData.cost_fixed || 0
     
-    // Coût temps = (durée en minutes / 60) × taux horaire
     const timeCost = (durationMinutes / 60) * ratePerHour
     const actiontimeSeconds = durationMinutes * 60
     

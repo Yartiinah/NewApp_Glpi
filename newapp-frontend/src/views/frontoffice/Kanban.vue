@@ -24,7 +24,6 @@
         <div class="column-header">
           <div class="column-title-block">
             <h3 class="column-title">{{ column.name }}</h3>
-            <span class="column-title-mg">{{ column.nameMg }}</span>
           </div>
           <span class="column-count">{{ getTicketsByStatus(column.status).length }}</span>
         </div>
@@ -98,10 +97,10 @@
             </div>
           </div>
 
-          <!-- ⭐ DEMANDEUR (USER) ⭐ -->
+          <!-- DEMANDEUR (USER) -->
           <div class="form-group">
             <label class="form-label">
-              <i class="fa-solid fa-user"></i> Demandeur (optionnel)
+              <i class="fa-solid fa-user"></i> Demandeur
             </label>
             <select v-model="selectedUserId" class="form-select" :disabled="loadingUsers">
               <option :value="null">-- Sélectionner un utilisateur --</option>
@@ -125,7 +124,7 @@
 
           <!-- Cost Section -->
           <div class="form-section">
-            <h4 class="form-section-title">Coût Imputé (optionnel)</h4>
+            <h4 class="form-section-title">Coût Imputé</h4>
             <div class="form-row">
               <div class="form-group half-width">
                 <label class="form-label">Durée (minutes)</label>
@@ -152,7 +151,7 @@
 
           <!-- Equipment Section -->
           <div class="form-section">
-            <h4 class="form-section-title">Lier des Équipements (optionnel)</h4>
+            <h4 class="form-section-title">Lier des Équipements</h4>
             <div class="mini-search-box">
               <i class="fa-solid fa-magnifying-glass search-icon-mini"></i>
               <input type="text" v-model="itemSearch" placeholder="Filtrer les matériels par nom ou modèle..." class="form-input form-input-mini" />
@@ -258,7 +257,7 @@
                   <span v-if="cost.cost_fixed">Coût fixe: {{ parseFloat(cost.cost_fixed).toFixed(2) }} €</span>
                 </div>
                 <div class="cost-total">
-                  {{ (parseFloat(cost.cost_time || 0) + parseFloat(cost.cost_fixed || 0)).toFixed(2) }} €
+                  {{ calculateCostTotal(cost).toFixed(2) }} €
                 </div>
               </div>
             </div>
@@ -294,11 +293,62 @@
             <i class="fa-solid fa-times"></i>
           </button>
         </div>
-        <p class="dialog-message">Voulez-vous ajouter des informations supplémentaires lors de ce changement de statut ?</p>
-        <div class="form-group">
-          <label class="form-label">Commentaire (optionnel)</label>
-          <textarea v-model="statusChangeComment" class="form-textarea" rows="3" placeholder="Ajoutez un commentaire..."></textarea>
+
+        <!-- Boîte SOLUTION (pour réouverture de ticket) -->
+        <div v-if="statusDialogType === 'solution'">
+          <p class="dialog-message">Ce ticket était terminé. Voulez-vous le rouvrir ?</p>
+          <div class="form-group">
+            <label class="form-label">Solution / Commentaire</label>
+            <textarea 
+              v-model="statusChangeComment" 
+              class="form-textarea" 
+              rows="3" 
+              placeholder="Décrivez pourquoi vous rouvrez ce ticket..."
+            ></textarea>
+          </div>
         </div>
+
+        <!-- Boîte OBSERVATEUR (pour progression normale) -->
+        <div v-if="statusDialogType === 'observer'">
+          <p class="dialog-message">Changement de statut en cours</p>
+          <div class="form-group">
+            <label class="form-label">Observateur</label>
+            <select v-model="selectedObserverId" class="form-select">
+              <option :value="null">-- Aucun observateur --</option>
+              <option 
+                v-for="user in users" 
+                :key="user.id" 
+                :value="user.id"
+              >
+                {{ user.realname || user.name }} ({{ user.name }})
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Commentaire</label>
+            <textarea 
+              v-model="statusChangeComment" 
+              class="form-textarea" 
+              rows="3" 
+              placeholder="Ajoutez un commentaire..."
+            ></textarea>
+          </div>
+        </div>
+
+        <!-- Boîte COMMENTAIRE (pour En cours → Nouveau) -->
+        <div v-if="statusDialogType === 'comment'">
+          <p class="dialog-message">Ajouter un commentaire</p>
+          <div class="form-group">
+            <label class="form-label">Commentaire</label>
+            <textarea 
+              v-model="statusChangeComment" 
+              class="form-textarea" 
+              rows="3" 
+              placeholder="Ajoutez un commentaire..."
+            ></textarea>
+          </div>
+        </div>
+
         <div class="dialog-actions">
           <button @click="showStatusDialog = false" class="btn btn-secondary">Annuler</button>
           <button @click="confirmStatusChange" class="btn btn-primary">Confirmer</button>
@@ -309,7 +359,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { 
   createTicket as createTicketGLPI, 
   getAllTickets, 
@@ -320,15 +370,106 @@ import {
   getTicketCosts, 
   getTicketLinkedItems, 
   getTicketById, 
-  getUsers 
+  getUsers,
+  glpiClient
 } from '../../services/frontoffice/glpi.service'
+import { getKanbanConfig } from '../../services/backoffice/Kanbanconfig.service'
 
-const columns = ref([
-  { id: 'nouveau', name: 'Nouveau', nameMg: 'vaovao', status: 1, color: '#e0f2fe' },
-  { id: 'inprogress', name: 'In progress', nameMg: 'efa manao', status: 2, color: '#fef3c7' },
-  { id: 'termine', name: 'Terminé', nameMg: 'vita', status: 6, color: '#dcfce7' }
-])
+// --- Configuration Kanban ---
+const KANBAN_COLUMNS = [
+  { id: 'nouveau',    status: 1, colorKey: 'column_nouveau_color',    defaultColor: '#e0f2fe' },
+  { id: 'inprogress', status: 2, colorKey: 'column_inprogress_color', defaultColor: '#fef3c7' },
+  { id: 'termine',    status: 6, colorKey: 'column_termine_color',    defaultColor: '#dcfce7' }
+]
 
+// Clés pour les noms selon la langue
+const NAMES_KEYS = {
+  fr: {
+    nouveau: 'column_nouveau_name_fr',
+    inprogress: 'column_inprogress_name_fr',
+    termine: 'column_termine_name_fr'
+  },
+  mg: {
+    nouveau: 'column_nouveau_name_mg',
+    inprogress: 'column_inprogress_name_mg',
+    termine: 'column_termine_name_mg'
+  },
+  en: {
+    nouveau: 'column_nouveau_name_en',
+    inprogress: 'column_inprogress_name_en',
+    termine: 'column_termine_name_en'
+  }
+}
+
+// Valeurs par défaut
+const DEFAULT_NAMES = {
+  fr: { nouveau: 'Nouveau', inprogress: 'En cours', termine: 'Terminé' },
+  mg: { nouveau: 'Vaovao', inprogress: 'Efa manao', termine: 'Vita' },
+  en: { nouveau: 'New', inprogress: 'In progress', termine: 'Closed' }
+}
+
+const LANGUAGE_KEY = 'kanban_language'
+const DEFAULT_LANGUAGE = 'fr'
+
+// État réactif
+const language = ref(DEFAULT_LANGUAGE)
+const columnNames = ref({
+  nouveau: DEFAULT_NAMES[DEFAULT_LANGUAGE].nouveau,
+  inprogress: DEFAULT_NAMES[DEFAULT_LANGUAGE].inprogress,
+  termine: DEFAULT_NAMES[DEFAULT_LANGUAGE].termine
+})
+const columnColors = ref(Object.fromEntries(KANBAN_COLUMNS.map(c => [c.colorKey, c.defaultColor])))
+
+// Colonnes calculées
+const columns = computed(() => KANBAN_COLUMNS.map(col => ({
+  id: col.id,
+  status: col.status,
+  name: columnNames.value[col.id],
+  color: columnColors.value[col.colorKey]
+})))
+
+async function loadKanbanConfig() {
+  try {
+    const config = await getKanbanConfig()
+    console.log('📦 Config chargée:', config)
+    
+    if (config[LANGUAGE_KEY]) {
+      language.value = config[LANGUAGE_KEY]
+    }
+    
+    const lang = language.value
+    for (const col of KANBAN_COLUMNS) {
+      const nameKey = NAMES_KEYS[lang]?.[col.id]
+      if (nameKey && config[nameKey]) {
+        columnNames.value[col.id] = config[nameKey]
+      } else if (DEFAULT_NAMES[lang]?.[col.id]) {
+        columnNames.value[col.id] = DEFAULT_NAMES[lang][col.id]
+      }
+    }
+    
+    for (const col of KANBAN_COLUMNS) {
+      if (config[col.colorKey]) {
+        columnColors.value[col.colorKey] = config[col.colorKey]
+      }
+    }
+  } catch (err) {
+    console.error('❌ Erreur chargement config kanban:', err.message)
+  }
+}
+
+watch(language, async (newLang) => {
+  const config = await getKanbanConfig()
+  for (const col of KANBAN_COLUMNS) {
+    const nameKey = NAMES_KEYS[newLang]?.[col.id]
+    if (nameKey && config[nameKey]) {
+      columnNames.value[col.id] = config[nameKey]
+    } else if (DEFAULT_NAMES[newLang]?.[col.id]) {
+      columnNames.value[col.id] = DEFAULT_NAMES[newLang][col.id]
+    }
+  }
+})
+
+// Tickets et autres données
 const tickets = ref([])
 const showCreateDialog = ref(false)
 const showDetailsDialog = ref(false)
@@ -338,6 +479,10 @@ const draggedTicket = ref(null)
 const targetStatus = ref(null)
 const statusChangeComment = ref('')
 const submitting = ref(false)
+
+// Variables pour les boîtes de dialogue
+const statusDialogType = ref(null) // 'observer', 'comment', 'solution'
+const selectedObserverId = ref(null)
 
 // Ticket details additional data
 const ticketCosts = ref([])
@@ -355,7 +500,6 @@ const users = ref([])
 const loadingUsers = ref(false)
 const selectedUserId = ref(null)
 
-// Computed pour afficher le nom du demandeur sélectionné
 const selectedUserDisplay = computed(() => {
   if (!selectedUserId.value) return ''
   const user = users.value.find(u => u.id === selectedUserId.value)
@@ -376,7 +520,6 @@ const loadingItems = ref(false)
 const itemSearch = ref('')
 const selectedItemIds = ref([])
 
-// Calcul du total pour la création
 function calculateTotal() {
   const duration = parseFloat(costDuration.value) || 0
   const rate = parseFloat(costRate.value) || 0
@@ -441,11 +584,16 @@ const filteredItems = computed(() => {
   })
 })
 
+function calculateCostTotal(cost) {
+  const rate = parseFloat(cost.cost_time) || 0
+  const fixed = parseFloat(cost.cost_fixed) || 0
+  const hours = (parseFloat(cost.actiontime) || 0) / 3600
+  return rate * hours + fixed
+}
+
 const totalTicketCost = computed(() => {
   return ticketCosts.value.reduce((total, cost) => {
-    const timeCost = parseFloat(cost.cost_time) || 0
-    const fixedCost = parseFloat(cost.cost_fixed) || 0
-    return total + timeCost + fixedCost
+    return total + calculateCostTotal(cost)
   }, 0)
 })
 
@@ -465,7 +613,34 @@ function onDrop(event, columnId) {
 
   if (draggedTicket.value.status !== column.status) {
     targetStatus.value = column.status
-    showStatusDialog.value = true
+    
+    const fromStatus = draggedTicket.value.status
+    const toStatus = column.status
+    
+    // Terminé → En cours ou Nouveau : boîte SOLUTION
+    if (fromStatus === 6 && (toStatus === 1 || toStatus === 2)) {
+      statusDialogType.value = 'solution'
+      statusChangeComment.value = ''
+      showStatusDialog.value = true
+    }
+    // Nouveau → En cours/Terminé ou En cours → Terminé : boîte OBSERVATEUR
+    else if ((fromStatus === 1 && (toStatus === 2 || toStatus === 6)) ||
+             (fromStatus === 2 && toStatus === 6)) {
+      statusDialogType.value = 'observer'
+      selectedObserverId.value = null
+      statusChangeComment.value = ''
+      showStatusDialog.value = true
+    }
+    // En cours → Nouveau : boîte COMMENTAIRE
+    else if (fromStatus === 2 && toStatus === 1) {
+      statusDialogType.value = 'comment'
+      statusChangeComment.value = ''
+      showStatusDialog.value = true
+    }
+    // Autres cas : changement direct
+    else {
+      confirmStatusChange()
+    }
   }
 }
 
@@ -474,11 +649,32 @@ async function confirmStatusChange() {
 
   try {
     await updateTicketStatus(draggedTicket.value.id, targetStatus.value, statusChangeComment.value)
+    
+    // Si c'est une boîte observateur et qu'un observateur est sélectionné
+    if (statusDialogType.value === 'observer' && selectedObserverId.value) {
+      try {
+        await glpiClient.post('/Ticket_User', {
+          input: {
+            tickets_id: draggedTicket.value.id,
+            users_id: selectedObserverId.value,
+            type: 2
+          }
+        })
+        console.log(`👁️ Observateur ${selectedObserverId.value} ajouté au ticket ${draggedTicket.value.id}`)
+      } catch (err) {
+        console.error(`Erreur ajout observateur ${selectedObserverId.value}:`, err)
+      }
+    }
+    
     draggedTicket.value.status = targetStatus.value
+    
     showStatusDialog.value = false
     statusChangeComment.value = ''
+    selectedObserverId.value = null
+    statusDialogType.value = null
     draggedTicket.value = null
     targetStatus.value = null
+    
     await fetchTickets()
   } catch (err) {
     console.error('Failed to update ticket status:', err)
@@ -516,7 +712,6 @@ async function createTicket() {
       }
     }
 
-    // Ajout du coût si des données sont fournies
     if (costDuration.value || costRate.value || costFixed.value) {
       const duration = parseFloat(costDuration.value) || 0
       const rate = parseFloat(costRate.value) || 0
@@ -630,9 +825,15 @@ function formatDate(dateStr) {
 
 onMounted(() => {
   localStorage.removeItem('glpi_mock_mode')
+  loadKanbanConfig()
   fetchTickets()
   fetchEquipments()
   fetchUsers()
+  window.addEventListener('kanban-config-updated', loadKanbanConfig)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('kanban-config-updated', loadKanbanConfig)
 })
 </script>
 

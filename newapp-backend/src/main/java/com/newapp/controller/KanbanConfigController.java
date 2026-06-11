@@ -44,12 +44,10 @@ public class KanbanConfigController {
         if (value == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Champ 'value' manquant"));
         }
-        int rows = jdbc.update(
-            "UPDATE kanban_config SET value = ?, updated_at = datetime('now') WHERE key = ?",
-            value, key);
-        if (rows == 0) {
-            return ResponseEntity.notFound().build();
-        }
+        jdbc.update(
+            "INSERT INTO kanban_config (key, value, updated_at) VALUES (?, ?, datetime('now')) " +
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+            key, value);
         return ResponseEntity.ok(Map.of("key", key, "value", value, "updated", true));
     }
 
@@ -62,8 +60,9 @@ public class KanbanConfigController {
             String value = entry.get("value");
             if (key != null && value != null) {
                 total += jdbc.update(
-                    "UPDATE kanban_config SET value = ?, updated_at = datetime('now') WHERE key = ?",
-                    value, key);
+                    "INSERT INTO kanban_config (key, value, updated_at) VALUES (?, ?, datetime('now')) " +
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')",
+                    key, value);
             }
         }
         return ResponseEntity.ok(Map.of("updated", total));

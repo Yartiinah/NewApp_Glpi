@@ -535,10 +535,10 @@ async function saveTicket() {
     for (const cost of editForm.value.costs) {
       try {
         await addTicketCost(editingTicket.value.id, {
-          name:             cost.name,
-          duration_seconds: (cost.duration || 0) * 60,  // minutes → secondes (actiontime GLPI)
-          cost_time:        cost.cost_time,
-          cost_fixed:       cost.cost_fixed
+          name:       cost.name,
+          actiontime: (cost.duration || 0) * 60,  // minutes → secondes (actiontime GLPI)
+          cost_time:  cost.cost_time,
+          cost_fixed: cost.cost_fixed
         })
       } catch (err) {
         console.error(`Failed to add cost:`, err)
