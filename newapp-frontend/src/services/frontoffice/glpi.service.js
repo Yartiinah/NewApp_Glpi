@@ -211,7 +211,7 @@ export async function getTicketById(ticketId) {
 }
 
 // =============================================
-// COÛTS DES TICKETS (AJOUTÉ)
+// COÛTS DES TICKETS (CORRIGÉ)
 // =============================================
 
 export async function getTicketCosts(ticketId) {
@@ -247,15 +247,28 @@ export async function getTicketLinkedItems(ticketId) {
 export async function addTicketCost(ticketId, costData) {
   await ensureSession()
   try {
-    return (await glpiClient.post('/TicketCost', {
+    // Calcul correct du coût temps
+    // duration est en minutes, cost_time est le taux horaire
+    const durationMinutes = costData.duration || 0
+    const ratePerHour = costData.cost_time || 0
+    const fixedCost = costData.cost_fixed || 0
+    
+    // Coût temps = (durée en minutes / 60) × taux horaire
+    const timeCost = (durationMinutes / 60) * ratePerHour
+    const actiontimeSeconds = durationMinutes * 60
+    
+    console.log(`💰 Calcul coût: ${durationMinutes}min × ${ratePerHour}€/h = ${timeCost.toFixed(2)}€ + ${fixedCost}€ fixe = ${(timeCost + fixedCost).toFixed(2)}€`)
+    
+    const res = await glpiClient.post('/TicketCost', {
       input: {
         tickets_id: ticketId,
         name: costData.name || 'Coût Frontoffice',
-        actiontime: costData.duration || 0,
-        cost_time: costData.cost_time || 0,
-        cost_fixed: costData.cost_fixed || 0
+        actiontime: actiontimeSeconds,
+        cost_time: timeCost,
+        cost_fixed: fixedCost
       }
-    })).data
+    })
+    return res.data
   } catch (err) { 
     console.error('❌ addTicketCost:', err.message)
     throw err 
