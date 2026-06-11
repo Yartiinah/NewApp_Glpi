@@ -14,7 +14,7 @@ console.log('  GLPI_URL:', GLPI_URL)
 // Récupérer la session existante (celle du backoffice)
 let sessionToken = localStorage.getItem('glpi_session_token')
 
-// S'assurer que baseURL se termine sans slash pour que les chemins relatifs fonctionnent
+// S'assurer que baseURL se termine sans slash
 const BASE_URL = GLPI_URL.endsWith('/') ? GLPI_URL.slice(0, -1) : GLPI_URL
 
 export const glpiClient = axios.create({
@@ -22,7 +22,7 @@ export const glpiClient = axios.create({
   headers: { 'Content-Type': 'application/json', 'App-Token': APP_TOKEN }
 })
 
-// Ajoute le Session-Token à chaque requête (depuis localStorage pour être synchro)
+// Ajoute le Session-Token à chaque requête (depuis localStorage)
 glpiClient.interceptors.request.use(config => {
   const token = localStorage.getItem('glpi_session_token')
   if (token) {
@@ -53,7 +53,6 @@ async function _doInitSession() {
   console.log('🔗 Appel API initSession (frontoffice):', apiUrl)
   
   try {
-    // Utilise glpiClient (URL relative) pour passer par le proxy Vite
     const response = await glpiClient.get('initSession', {
       headers: {
         'App-Token': APP_TOKEN,
@@ -69,15 +68,11 @@ async function _doInitSession() {
     return sessionToken
   } catch (err) {
     console.error('❌ Erreur connexion GLPI (frontoffice):', err.message)
-    if (err.response?.status === 400) {
-      console.error('⚠️ Vérifie que GLPI est accessible sur:', apiUrl)
-    }
     throw err
   }
 }
 
 export async function ensureSession() {
-  // Vérifier si la session existe et n'a pas expiré
   const expiry = localStorage.getItem('glpi_session_expiry')
   if (expiry && Date.now() > parseInt(expiry)) {
     console.log('🔄 Session expirée, renouvellement...')
@@ -86,7 +81,6 @@ export async function ensureSession() {
     sessionToken = null
   }
   
-  // Récupérer le token depuis localStorage (au cas où le backoffice l'aurait changé)
   const storedToken = localStorage.getItem('glpi_session_token')
   if (storedToken && storedToken !== sessionToken) {
     sessionToken = storedToken
@@ -120,23 +114,19 @@ export async function fetchPaginated(itemtype, extraParams = {}) {
     try {
       res = await glpiClient.get(`/${itemtype}`, {
         params: extraParams,
-        headers: {
-          'Range': `${offset}-${offset + limit - 1}`
-        }
+        headers: { 'Range': `${offset}-${offset + limit - 1}` }
       })
     } catch (err) {
       if (err.response?.status === 404) break
       console.error(`❌ fetchPaginated ${itemtype}:`, err.message)
       throw err
     }
-
     const items = normalizeGlpiResponse(res.data)
     if (items.length === 0) break
     all = all.concat(items)
     if (items.length < limit) break
     offset += limit
   }
-
   return all
 }
 
@@ -148,8 +138,7 @@ export async function getComputers() {
   await ensureSession()
   try {
     return await fetchPaginated('Computer', { is_deleted: '0' })
-  }
-  catch (err) { 
+  } catch (err) { 
     console.error('❌ getComputers:', err.message)
     return [] 
   }
@@ -163,8 +152,7 @@ export async function getMonitors() {
   await ensureSession()
   try {
     return await fetchPaginated('Monitor', { is_deleted: '0' })
-  }
-  catch (err) { 
+  } catch (err) { 
     console.error('❌ getMonitors:', err.message)
     return [] 
   }
@@ -178,8 +166,7 @@ export async function getAllTickets() {
   await ensureSession()
   try {
     return await fetchPaginated('Ticket', { is_deleted: '0' })
-  }
-  catch (err) { 
+  } catch (err) { 
     console.error('❌ getAllTickets:', err.message)
     return [] 
   }
@@ -199,23 +186,12 @@ export async function createTicket(data) {
 export async function updateTicketStatus(ticketId, newStatus, comment = '') {
   await ensureSession()
   try {
-    const payload = {
-      input: {
-        id: ticketId,
-        status: newStatus
-      }
-    }
-    
+    const payload = { input: { id: ticketId, status: newStatus } }
     if (comment) {
       await glpiClient.post('/ITILFollowup', {
-        input: {
-          itemtype: 'Ticket',
-          items_id: ticketId,
-          content: comment
-        }
+        input: { itemtype: 'Ticket', items_id: ticketId, content: comment }
       })
     }
-    
     return (await glpiClient.put(`/Ticket/${ticketId}`, payload)).data
   } catch (err) { 
     console.error('❌ updateTicketStatus:', err.response?.data || err.message)
@@ -231,6 +207,74 @@ export async function getTicketById(ticketId) {
   } catch (err) {
     console.error('❌ getTicketById:', err.message)
     throw err
+  }
+}
+
+// =============================================
+// COÛTS DES TICKETS (AJOUTÉ)
+// =============================================
+
+export async function getTicketCosts(ticketId) {
+  await ensureSession()
+  try {
+    const res = await glpiClient.get(`/TicketCost`, {
+      params: { 'tickets_id': ticketId, is_deleted: '0' }
+    })
+    let costs = res.data
+    if (!Array.isArray(costs)) costs = Object.values(costs || {})
+    return costs.filter(c => c && typeof c.id === 'number')
+  } catch (err) {
+    console.error('❌ getTicketCosts:', err.message)
+    return []
+  }
+}
+
+export async function getTicketLinkedItems(ticketId) {
+  await ensureSession()
+  try {
+    const res = await glpiClient.get(`/Item_Ticket`, {
+      params: { tickets_id: ticketId, is_deleted: '0' }
+    })
+    let items = res.data
+    if (!Array.isArray(items)) items = Object.values(items || {})
+    return items.filter(i => i && typeof i.id === 'number')
+  } catch (err) {
+    console.error('❌ getTicketLinkedItems:', err.message)
+    return []
+  }
+}
+
+export async function addTicketCost(ticketId, costData) {
+  await ensureSession()
+  try {
+    return (await glpiClient.post('/TicketCost', {
+      input: {
+        tickets_id: ticketId,
+        name: costData.name || 'Coût Frontoffice',
+        actiontime: costData.duration || 0,
+        cost_time: costData.cost_time || 0,
+        cost_fixed: costData.cost_fixed || 0
+      }
+    })).data
+  } catch (err) { 
+    console.error('❌ addTicketCost:', err.message)
+    throw err 
+  }
+}
+
+// =============================================
+// LIENS ÉQUIPEMENTS
+// =============================================
+
+export async function linkItemToTicket(ticketId, itemtype, itemId) {
+  await ensureSession()
+  try {
+    return (await glpiClient.post('/Item_Ticket', {
+      input: { tickets_id: ticketId, itemtype, items_id: itemId }
+    })).data
+  } catch (err) { 
+    console.error('❌ linkItemToTicket:', err.message)
+    throw err 
   }
 }
 
@@ -330,73 +374,14 @@ export async function getAllItems() {
 export async function getUsers() {
   await ensureSession()
   try {
-    return await fetchPaginated('User', { is_deleted: '0' })
+    const res = await glpiClient.get('/User', {
+      params: { is_deleted: '0', range: '0-500' }
+    })
+    let users = res.data
+    if (!Array.isArray(users)) users = Object.values(users || {})
+    return users.filter(u => u && typeof u.id === 'number')
   } catch (err) {
     console.error('❌ getUsers (frontoffice):', err.message)
-    return []
-  }
-}
-
-// =============================================
-// LIENS ET COÛTS
-// =============================================
-
-export async function linkItemToTicket(ticketId, itemtype, itemId) {
-  await ensureSession()
-  try {
-    return (await glpiClient.post('/Item_Ticket', {
-      input: { tickets_id: ticketId, itemtype, items_id: itemId }
-    })).data
-  } catch (err) { 
-    console.error('❌ linkItemToTicket:', err.message)
-    throw err 
-  }
-}
-
-export async function addTicketCost(ticketId, costData) {
-  await ensureSession()
-  try {
-    return (await glpiClient.post('/TicketCost', {
-      input: {
-        tickets_id: ticketId,
-        name: 'Coût Frontoffice',
-        duration:   costData.duration   || 0,
-        cost_time:  costData.cost_time  || 0,
-        cost_fixed: costData.cost_fixed || 0
-      }
-    })).data
-  } catch (err) { 
-    console.error('❌ addTicketCost:', err.message)
-    throw err 
-  }
-}
-
-export async function getTicketCosts(ticketId) {
-  await ensureSession()
-  try {
-    const res = await glpiClient.get(`/TicketCost`, {
-      params: { 'tickets_id': ticketId, is_deleted: '0' }
-    })
-    let costs = res.data
-    if (!Array.isArray(costs)) costs = Object.values(costs || {})
-    return costs.filter(c => c && typeof c.id === 'number')
-  } catch (err) {
-    console.error('❌ getTicketCosts:', err.message)
-    return []
-  }
-}
-
-export async function getTicketLinkedItems(ticketId) {
-  await ensureSession()
-  try {
-    const res = await glpiClient.get(`/Item_Ticket`, {
-      params: { tickets_id: ticketId, is_deleted: '0' }
-    })
-    let items = res.data
-    if (!Array.isArray(items)) items = Object.values(items || {})
-    return items.filter(i => i && typeof i.id === 'number')
-  } catch (err) {
-    console.error('❌ getTicketLinkedItems:', err.message)
     return []
   }
 }

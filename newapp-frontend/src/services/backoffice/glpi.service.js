@@ -11,25 +11,21 @@ export const glpiClient = axios.create({
   headers: { 'Content-Type': 'application/json', 'App-Token': APP_TOKEN }
 })
 
-// Durée de session : 5 jours (en millisecondes)
-const SESSION_DURATION_MS = 5 * 24 * 60 * 60 * 1000 // 432000000 ms
+const SESSION_DURATION_MS = 5 * 24 * 60 * 60 * 1000
 
 let sessionToken = null
 
-// Restaure la session depuis localStorage si encore valide
 const savedToken  = localStorage.getItem('glpi_session_token')
 const savedExpiry = localStorage.getItem('glpi_session_expiry')
 if (savedToken && savedExpiry && Date.now() < parseInt(savedExpiry)) {
   sessionToken = savedToken
 }
 
-// Ajoute le Session-Token à chaque requête
 glpiClient.interceptors.request.use(config => {
   if (sessionToken) config.headers['Session-Token'] = sessionToken
   return config
 })
 
-// Renouvelle la session automatiquement si erreur 401
 glpiClient.interceptors.response.use(
   response => response,
   async error => {
@@ -47,10 +43,6 @@ glpiClient.interceptors.response.use(
     return Promise.reject(error)
   }
 )
-
-// =============================================
-// SESSION GLPI
-// =============================================
 
 let sessionInitPromise = null
 
@@ -80,7 +72,7 @@ async function _doInitSession() {
     const expiryTime = Date.now() + SESSION_DURATION_MS
     localStorage.setItem('glpi_session_expiry', expiryTime.toString())
     localStorage.removeItem('glpi_mock_mode')
-    console.log('✅ Session GLPI initialisée (backoffice), expire le', new Date(expiryTime).toLocaleString())
+    console.log('✅ Session GLPI initialisée, expire le', new Date(expiryTime).toLocaleString())
     return sessionToken
   } catch (err) {
     console.error('❌ Erreur connexion GLPI:', err.message)
@@ -89,10 +81,9 @@ async function _doInitSession() {
 }
 
 export async function ensureSession() {
-  // Vérifier si la session a expiré dans localStorage
   const expiry = localStorage.getItem('glpi_session_expiry')
   if (expiry && Date.now() > parseInt(expiry)) {
-    console.log('🔄 Session GLPI expirée, renouvellement automatique...')
+    console.log('🔄 Session expirée, renouvellement...')
     localStorage.removeItem('glpi_session_token')
     localStorage.removeItem('glpi_session_expiry')
     sessionToken = null
@@ -100,9 +91,6 @@ export async function ensureSession() {
   if (!sessionToken) await initSessionWithUserToken()
 }
 
-// =============================================
-// PAGINATION (CORRIGÉE POUR L'API GLPI)
-// =============================================
 function normalizeGlpiResponse(data) {
   if (!data) return []
   if (Array.isArray(data)) return data
@@ -119,25 +107,20 @@ export async function fetchPaginated(itemtype, extraParams = {}) {
   while (true) {
     let res
     try {
-      // CORRECTION : Le paramètre 'range' est déplacé de 'params' vers 'headers'
       res = await glpiClient.get(`/${itemtype}`, {
         params: extraParams,
-        headers: {
-          'Range': `${offset}-${offset + limit - 1}`
-        }
+        headers: { 'Range': `${offset}-${offset + limit - 1}` }
       })
     } catch (err) {
       if (err.response?.status === 404) break
       throw err
     }
-
     const items = normalizeGlpiResponse(res.data)
     if (items.length === 0) break
     all = all.concat(items)
     if (items.length < limit) break
     offset += limit
   }
-
   return all
 }
 
@@ -207,6 +190,22 @@ export async function updateTicket(id, data) {
     console.log('📝 Mise à jour ticket GLPI:', id, data)
     return (await glpiClient.put(`/Ticket/${id}`, { input: data })).data
   } catch (err) { console.error('❌ updateTicket:', err.response?.data || err.message); throw err }
+}
+
+export async function updateTicketStatus(id, status, comment = '') {
+  await ensureSession()
+  try {
+    const payload = { input: { id: id, status: status } }
+    if (comment) {
+      await glpiClient.post('/ITILFollowup', {
+        input: { itemtype: 'Ticket', items_id: id, content: comment }
+      })
+    }
+    return (await glpiClient.put(`/Ticket/${id}`, payload)).data
+  } catch (err) { 
+    console.error('❌ updateTicketStatus:', err.response?.data || err.message)
+    throw err 
+  }
 }
 
 export function extractTicketRef(content) {
@@ -500,7 +499,7 @@ export async function addTicketCost(ticketId, costData) {
     costs[ticketId].push({
       id: newId,
       name: costData.name || 'Coût CSV',
-      duration: costData.actiontime || costData.duration || 0,
+      actiontime: costData.actiontime || 0,
       cost_time: costData.cost_time || 0,
       cost_fixed: costData.cost_fixed || 0
     })
@@ -510,18 +509,18 @@ export async function addTicketCost(ticketId, costData) {
 
   await ensureSession()
   try {
-    const duration = costData.actiontime || costData.duration || 0
+    const actiontime = costData.actiontime || 0
     const costTime = costData.cost_time || 0
     const costFixed = costData.cost_fixed || 0
     const name = costData.name || 'Coût CSV'
     
-    console.log(`💰 Ajout coût ticket ${ticketId}: durée=${duration}s, cost_time=${costTime}, cost_fixed=${costFixed}`)
+    console.log(`💰 Ajout coût ticket ${ticketId}: actiontime=${actiontime}s, cost_time=${costTime}, cost_fixed=${costFixed}`)
     
     const res = await glpiClient.post('/TicketCost', {
       input: {
         tickets_id: parseInt(ticketId),
         name: name,
-        duration: parseInt(duration),
+        actiontime: parseInt(actiontime),
         cost_time: parseFloat(costTime),
         cost_fixed: parseFloat(costFixed)
       }

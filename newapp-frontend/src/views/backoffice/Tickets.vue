@@ -284,7 +284,7 @@
             <div v-for="(cost, index) in editForm.costs" :key="index" class="cost-row">
               <div class="cost-inputs">
                 <input type="text" v-model="cost.name" placeholder="Libellé" class="form-input cost-input" />
-                <input type="number" v-model="cost.duration" placeholder="Durée (min)" class="form-input cost-input" />
+                <input type="number" v-model="cost.duration" placeholder="Durée (min)" class="form-input cost-input" title="Durée en minutes" />
                 <input type="number" v-model="cost.cost_time" placeholder="Taux/h (€)" class="form-input cost-input" />
                 <input type="number" v-model="cost.cost_fixed" placeholder="Fixe (€)" class="form-input cost-input" />
               </div>
@@ -471,7 +471,7 @@ async function loadTicketCosts(ticketId) {
     editForm.value.costs = Array.isArray(costs) ? costs.map(c => ({
       id: c.id,
       name: c.name || 'Coût',
-      duration: c.actiontime || 0,
+      duration: Math.round((c.actiontime || 0) / 60),  // secondes → minutes pour l'affichage
       cost_time: c.cost_time || 0,
       cost_fixed: c.cost_fixed || 0
     })) : []
@@ -535,10 +535,10 @@ async function saveTicket() {
     for (const cost of editForm.value.costs) {
       try {
         await addTicketCost(editingTicket.value.id, {
-          name: cost.name,
-          actiontime: cost.duration,
-          cost_time: cost.cost_time,
-          cost_fixed: cost.cost_fixed
+          name:             cost.name,
+          duration_seconds: (cost.duration || 0) * 60,  // minutes → secondes (actiontime GLPI)
+          cost_time:        cost.cost_time,
+          cost_fixed:       cost.cost_fixed
         })
       } catch (err) {
         console.error(`Failed to add cost:`, err)

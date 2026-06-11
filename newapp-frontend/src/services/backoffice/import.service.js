@@ -21,7 +21,10 @@ import {
   resolveComputerModelId,
   resolveMonitorModelId,
   clearLookupCaches,
-  ensureSession
+  ensureSession,
+  getComputers,
+  getMonitors,
+  getTicketCosts
 } from './glpi.service'
 import { createTicket, linkItemToTicket, getAllItems } from '../frontoffice/glpi.service'
 
@@ -243,23 +246,114 @@ function failImport(message, tracker) {
   throw error
 }
 
-// 1. Import CSV Éléments (tout ou rien)
+// =============================================
+// GESTION DES DOUBLONS ET FICHIERS VIDES
+// =============================================
+
+// Vérifie si un équipement existe déjà (par nom ou numéro d'inventaire)
+async function checkExistingItem(itemtype, name, serial) {
+  const existingItems = itemtype === 'monitor' 
+    ? await getMonitors().catch(() => [])
+    : await getComputers().catch(() => [])
+  
+  return existingItems.find(item => 
+    item.name?.toLowerCase() === name?.toLowerCase() ||
+    item.serial?.toLowerCase() === serial?.toLowerCase() ||
+    item.otherserial?.toLowerCase() === serial?.toLowerCase()
+  )
+}
+
+// Vérifie si un ticket existe déjà (par référence ou titre)
+// Remplacer la fonction checkExistingTicket par celle-ci
+async function checkExistingTicket(ticketData) {
+  const tickets = await getTickets().catch(() => [])
+  
+  // Vérification par référence (priorité 1)
+  if (ticketData.refTicket) {
+    const existingByRef = tickets.find(t => extractTicketRef(t.content) === ticketData.refTicket)
+    if (existingByRef) return existingByRef
+  }
+  
+  // Vérification par tous les champs (priorité 2)
+  const existingByAllFields = tickets.find(existing => {
+    const sameName = existing.name?.toLowerCase() === ticketData.name?.toLowerCase()
+    const sameContent = existing.content?.toLowerCase() === ticketData.content?.toLowerCase()
+    const sameType = existing.type === ticketData.type
+    const samePriority = existing.priority === ticketData.priority
+    const sameUser = existing._users_id_requester === ticketData.userId
+    
+    const existingDate = existing.date_creation?.split(' ')[0]
+    const sameDate = existingDate === ticketData.date
+    
+    return sameName && sameContent && sameType && samePriority && sameUser && sameDate
+  })
+  
+  if (existingByAllFields) return existingByAllFields
+  
+  return null
+}
+
+// Vérifie si un coût existe déjà pour un ticket
+async function checkExistingCost(ticketId, actiontime, costTime, costFixed) {
+  const costs = await getTicketCosts(ticketId).catch(() => [])
+  return costs.find(cost => 
+    Math.abs((cost.actiontime || 0) - actiontime) < 5 &&
+    Math.abs((cost.cost_time || 0) - costTime) < 0.01 &&
+    Math.abs((cost.cost_fixed || 0) - costFixed) < 0.01
+  )
+}
+
+// =============================================
+// 1. Import CSV Éléments
+// =============================================
+
 export async function importElementsCSV(file, onProgress) {
+  // Gestion fichier vide
+  if (!file || file.size === 0) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const text = await file.text()
+  if (!text.trim()) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const rows = parseCSV(text)
   if (rows.length === 0) {
-    return { success: false, importedCount: 0, errorCount: 1, message: 'Le fichier CSV est vide.' }
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
   }
 
   const tracker = createRollbackTracker()
   const userCache = await buildUserCache()
+  let importedCount = 0
+  let duplicateCount = 0
+  let skippedCount = 0
 
   try {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
       const name = row.Name || row.name
       if (!name?.trim()) {
-        failImport(`Ligne ${i + 2} : le champ Name est obligatoire.`, tracker)
+        skippedCount++
+        continue
       }
 
       const itemtype = (row.Item_Type || row.item_type || 'Computer').toLowerCase()
@@ -269,6 +363,14 @@ export async function importElementsCSV(file, onProgress) {
       const maker = row.Manufacturer || row.manufacturer || ''
       const status = row.Status || row.status || ''
       const userName = row.User || row.user || ''
+
+      // VÉRIFICATION DOUBLON
+      const existing = await checkExistingItem(itemtype, name, serial)
+      if (existing) {
+        console.log(`⚠️ Doublon ignoré: ${name} (existe déjà avec ID ${existing.id})`)
+        duplicateCount++
+        continue
+      }
 
       const userId = await resolveOrCreateUser(userName, userCache, tracker)
 
@@ -312,43 +414,80 @@ export async function importElementsCSV(file, onProgress) {
 
       payload.comment = `Importé via CSV. Status: ${status}. Localisation: ${location}. Fabricant: ${maker}. Modèle: ${model}`
 
-      let created
       if (itemtype === 'monitor') {
-        created = await createMonitor(payload)
-        if (!created?.id) failImport(`Ligne ${i + 2} : échec création moniteur "${name}".`, tracker)
-        tracker.monitors.push(created.id)
+        const created = await createMonitor(payload)
+        if (created?.id) tracker.monitors.push(created.id)
       } else {
-        created = await createComputer(payload)
-        if (!created?.id) failImport(`Ligne ${i + 2} : échec création ordinateur "${name}".`, tracker)
-        tracker.computers.push(created.id)
+        const created = await createComputer(payload)
+        if (created?.id) tracker.computers.push(created.id)
       }
+      importedCount++
 
       if (onProgress) onProgress(Math.round(((i + 1) / rows.length) * 100))
     }
 
+    tracker.computers = []
+    tracker.monitors = []
+    tracker.users = []
+    tracker.lookups = []
+
     return {
       success: true,
-      importedCount: rows.length,
+      importedCount,
+      duplicateCount,
+      skippedCount,
       errorCount: 0,
-      message: `${rows.length} élément(s) importé(s) avec succès (relations GLPI incluses).`
+      message: `✅ ${importedCount} élément(s) importé(s). ${duplicateCount} doublon(s) ignoré(s). ${skippedCount} ligne(s) ignorée(s).`
     }
   } catch (err) {
     await rollbackImport(err.tracker || tracker)
     return {
       success: false,
       importedCount: 0,
+      duplicateCount,
+      skippedCount,
       errorCount: rows.length,
-      message: `Import annulé (tout ou rien) : ${err.message}`
+      message: `❌ Import annulé : ${err.message}`
     }
   }
 }
 
-// 2. Import CSV Tickets (tout ou rien)
+// =============================================
+// 2. Import CSV Tickets
+// =============================================
+
 export async function importTicketsCSV(file, onProgress) {
+  // Gestion fichier vide
+  if (!file || file.size === 0) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const text = await file.text()
+  if (!text.trim()) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const rows = parseCSV(text)
   if (rows.length === 0) {
-    return { success: false, importedCount: 0, errorCount: 1, message: 'Le fichier CSV est vide.' }
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
   }
 
   const tracker = createRollbackTracker()
@@ -358,13 +497,26 @@ export async function importTicketsCSV(file, onProgress) {
     if (item.name) itemsMap[item.name.toLowerCase().trim()] = item
   })
 
+  let importedCount = 0
+  let duplicateCount = 0
+  let skippedCount = 0
+
   try {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
       const refTicket = String(row.Ref_Ticket || row.ref_ticket || '').trim()
       const title = row.Titre || row.titre || row.Title || row.title
       if (!title?.trim()) {
-        failImport(`Ligne ${i + 2} : le champ Titre est obligatoire.`, tracker)
+        skippedCount++
+        continue
+      }
+
+      // VÉRIFICATION DOUBLON
+      const existingTicket = await checkExistingTicket(refTicket, title.trim())
+      if (existingTicket) {
+        console.log(`⚠️ Ticket doublon ignoré: ${title} (existe déjà avec ID ${existingTicket.id})`)
+        duplicateCount++
+        continue
       }
 
       const desc = row.Description || row.description || 'Importé via CSV.'
@@ -372,7 +524,6 @@ export async function importTicketsCSV(file, onProgress) {
       const status = mapTicketStatus(row.Status || row.status)
       const priority = mapTicketPriority(row.Priority || row.priority)
 
-      // Récupère date + heure (colonnes séparées ou combinées)
       const dateStr = row.Date || row.date || row.Date_creation || row.date_creation || ''
       const heureStr = row.Heure || row.heure || row.Time || row.time || ''
 
@@ -385,16 +536,13 @@ export async function importTicketsCSV(file, onProgress) {
         priority
       }
 
-      // Construit la date au format GLPI : YYYY-MM-DD HH:MM:SS
       if (dateStr) {
         try {
           let normalized = dateStr.trim()
-          // Accepte DD/MM/YYYY → YYYY-MM-DD
           const frMatch = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
           if (frMatch) {
             normalized = `${frMatch[3]}-${frMatch[2].padStart(2, '0')}-${frMatch[1].padStart(2, '0')}`
           }
-          // Combine avec l'heure si colonne séparée
           let dateTimeStr = normalized
           if (heureStr && !normalized.includes(' ') && !normalized.includes('T')) {
             dateTimeStr = `${normalized} ${heureStr.trim()}`
@@ -403,13 +551,9 @@ export async function importTicketsCSV(file, onProgress) {
           if (!isNaN(parsedDate.getTime())) {
             const pad = n => String(n).padStart(2, '0')
             const formatted = `${parsedDate.getFullYear()}-${pad(parsedDate.getMonth()+1)}-${pad(parsedDate.getDate())} ${pad(parsedDate.getHours())}:${pad(parsedDate.getMinutes())}:${pad(parsedDate.getSeconds())}`
-            // GLPI : date = date ouverture, date_creation = date création
             ticketPayload.date = formatted
             ticketPayload.date_creation = formatted
             ticketPayload.date_mod = formatted
-            console.log(`📅 Ticket "${title.trim()}" → date GLPI : ${formatted}`)
-          } else {
-            console.warn('⚠️ Date invalide dans le CSV:', dateStr, heureStr)
           }
         } catch (e) {
           console.warn('⚠️ Erreur parsing date:', dateStr, e.message)
@@ -417,7 +561,10 @@ export async function importTicketsCSV(file, onProgress) {
       }
 
       const res = await createTicket(ticketPayload)
-      if (!res?.id) failImport(`Ligne ${i + 2} : échec création ticket "${title}".`, tracker)
+      if (!res?.id) {
+        skippedCount++
+        continue
+      }
 
       const ticketId = res.id
       tracker.tickets.push(ticketId)
@@ -428,21 +575,27 @@ export async function importTicketsCSV(file, onProgress) {
       const itemNames = parseItemsField(row.Items || row.items || '')
       for (const itemName of itemNames) {
         const matchedItem = itemsMap[itemName.toLowerCase().trim()]
-        if (!matchedItem) {
-          failImport(`Ligne ${i + 2} : équipement "${itemName}" introuvable dans GLPI. Importez d'abord les éléments.`, tracker)
+        if (matchedItem) {
+          const linkRes = await linkItemToTicket(ticketId, matchedItem.itemtype, matchedItem.id)
+          if (linkRes?.id) tracker.itemLinks.push(linkRes.id)
         }
-        const linkRes = await linkItemToTicket(ticketId, matchedItem.itemtype, matchedItem.id)
-        if (linkRes?.id) tracker.itemLinks.push(linkRes.id)
       }
+
+      importedCount++
 
       if (onProgress) onProgress(Math.round(((i + 1) / rows.length) * 100))
     }
 
+    tracker.tickets = []
+    tracker.itemLinks = []
+
     return {
       success: true,
-      importedCount: rows.length,
+      importedCount,
+      duplicateCount,
+      skippedCount,
       errorCount: 0,
-      message: `${rows.length} ticket(s) importé(s) avec succès (liens équipements inclus).`
+      message: `✅ ${importedCount} ticket(s) importé(s). ${duplicateCount} doublon(s) ignoré(s). ${skippedCount} ligne(s) ignorée(s).`
     }
   } catch (err) {
     await rollbackImport(err.tracker || tracker)
@@ -450,68 +603,124 @@ export async function importTicketsCSV(file, onProgress) {
     return {
       success: false,
       importedCount: 0,
+      duplicateCount,
+      skippedCount,
       errorCount: rows.length,
-      message: `Import annulé (tout ou rien) : ${err.message}`
+      message: `❌ Import annulé : ${err.message}`
     }
   }
 }
 
-// 3. Import CSV Coûts (tout ou rien)
+// =============================================
+// 3. Import CSV Coûts
+// =============================================
+
 export async function importCostsCSV(file, onProgress) {
+  // Gestion fichier vide
+  if (!file || file.size === 0) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const text = await file.text()
+  if (!text.trim()) {
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
+  }
+
   const rows = parseCSV(text)
   if (rows.length === 0) {
-    return { success: false, importedCount: 0, errorCount: 1, message: 'Le fichier CSV est vide.' }
+    return { 
+      success: true, 
+      importedCount: 0, 
+      errorCount: 0, 
+      duplicateCount: 0,
+      message: '✅ Aucune donnée à importer (fichier vide).' 
+    }
   }
 
   const tracker = createRollbackTracker()
   const ticketsList = await getTickets()
+  let importedCount = 0
+  let duplicateCount = 0
+  let skippedCount = 0
 
   try {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]
       const numTicket = row.Num_Ticket || row.num_ticket
       if (!numTicket && numTicket !== 0) {
-        failImport(`Ligne ${i + 2} : le champ Num_Ticket est obligatoire.`, tracker)
+        skippedCount++
+        continue
       }
 
       const ticketId = await resolveTicketId(numTicket, ticketsList)
       if (!ticketId) {
-        failImport(`Ligne ${i + 2} : ticket "${numTicket}" introuvable. Importez d'abord les tickets.`, tracker)
+        skippedCount++
+        continue
       }
 
       const actiontime = parseInt(row.Duration_second || row.duration_second || 0, 10) || 0
       const costTime = parseFrenchNumber(row.Time_Cost || row.time_cost)
       const costFixed = parseFrenchNumber(row.Fixed_Cost || row.fixed_cost)
 
+      // VÉRIFICATION DOUBLON
+      const existingCost = await checkExistingCost(ticketId, actiontime, costTime, costFixed)
+      if (existingCost) {
+        duplicateCount++
+        continue
+      }
+
       const costRes = await addTicketCost(ticketId, {
         actiontime,
         cost_time: costTime,
-        cost_fixed: costFixed
+        cost_fixed: costFixed,
+        name: 'Coût_CSV'
       })
-      if (costRes?.id) tracker.costs.push(costRes.id)
+      if (costRes?.id) {
+        tracker.costs.push(costRes.id)
+        importedCount++
+      } else {
+        skippedCount++
+      }
 
       if (onProgress) onProgress(Math.round(((i + 1) / rows.length) * 100))
     }
 
+    tracker.costs = []
+
     return {
       success: true,
-      importedCount: rows.length,
+      importedCount,
+      duplicateCount,
+      skippedCount,
       errorCount: 0,
-      message: `${rows.length} coût(s) importé(s) avec succès.`
+      message: `✅ ${importedCount} coût(s) importé(s). ${duplicateCount} doublon(s) ignoré(s). ${skippedCount} ligne(s) ignorée(s).`
     }
   } catch (err) {
     await rollbackImport(err.tracker || tracker)
     return {
       success: false,
       importedCount: 0,
+      duplicateCount,
+      skippedCount,
       errorCount: rows.length,
-      message: `Import annulé (tout ou rien) : ${err.message}`
+      message: `❌ Import annulé : ${err.message}`
     }
   }
 }
 
-// 4. Import ZIP Images (simulé)
+// 4. Import ZIP Images
 export async function importImagesZIP(file, onProgress) {
   if (!file) {
     return { success: false, message: 'Aucun fichier ZIP sélectionné.' }
@@ -547,7 +756,6 @@ export async function importImagesZIP(file, onProgress) {
       }
     }
 
-    // Récupère la liste des équipements pour faire le matching nom ↔ équipement
     const itemsList = await getAllItems()
     const itemsMap = {}
     itemsList.forEach(item => {
@@ -568,7 +776,6 @@ export async function importImagesZIP(file, onProgress) {
       const ext        = '.' + filename.split('.').pop().toLowerCase()
       const mimeType   = getMimeType(ext)
 
-      // Matching équipement : nom exact, puis numéro d'inventaire, puis suffixe numérique
       let matchedItem = itemsMap[baseName.toLowerCase()]
       if (!matchedItem) {
         const numMatch = baseName.match(/(\d+)$/)
@@ -583,19 +790,13 @@ export async function importImagesZIP(file, onProgress) {
       }
 
       try {
-        // 1) Lit le fichier en ArrayBuffer depuis le ZIP
         const arrayBuffer = await zipEntry.async('arraybuffer')
 
-        // 2) Détecte le vrai format par magic bytes (ignore l'extension du fichier)
-        //    Un fichier peut être renommé .png mais être physiquement un JPEG, etc.
         const bytes = new Uint8Array(arrayBuffer.slice(0, 12))
         const realMime = detectRealMimeType(bytes) || mimeType
         const realExt  = mimeToExt(realMime)
         const fullFileName = baseName + realExt
 
-        console.log(`🔍 ${baseName}${ext} → vrai format détecté : ${realMime} (${realExt})`)
-
-        // 3) Crée un Blob binaire avec le vrai type MIME détecté
         const fileBlob = new Blob([arrayBuffer], { type: realMime })
 
         const uploadManifest = JSON.stringify({
@@ -613,21 +814,16 @@ export async function importImagesZIP(file, onProgress) {
           headers: {
             'App-Token':     APP_TOKEN,
             'Session-Token': sessionToken
-            // Pas de Content-Type manuel — axios génère le boundary automatiquement
           }
         })
 
-        console.log('📨 Réponse GLPI upload pour', fullFileName, ':', JSON.stringify(uploadRes.data))
         const docId = uploadRes.data?.id
         if (!docId) {
-          console.error('❌ Pas d\'ID dans la réponse GLPI pour', fullFileName, uploadRes.data)
           throw new Error(`GLPI n'a pas retourné d'ID pour ${fullFileName}`)
         }
 
         createdDocIds.push(docId)
 
-        // 3) GET sur le document pour récupérer le filepath réel
-        //    GLPI ne retourne pas toujours filepath dans la réponse POST
         let filepath = uploadRes.data?.filepath || ''
         if (!filepath) {
           try {
@@ -638,15 +834,11 @@ export async function importImagesZIP(file, onProgress) {
               }
             })
             filepath = docDetail.data?.filepath || ''
-            console.log('📄 Document GET ID:', docId, 'filepath:', filepath, 'pour', filename)
           } catch (getErr) {
             console.warn('⚠️ Impossible de récupérer filepath via GET:', getErr.message)
           }
-        } else {
-          console.log('📄 Document POST ID:', docId, 'filepath:', filepath, 'pour', filename)
         }
 
-        // 4) Associe le document à l'équipement (Document_Item)
         await axios.post(`${GLPI_URL}/Document_Item`, {
           input: {
             documents_id: docId,
@@ -661,14 +853,13 @@ export async function importImagesZIP(file, onProgress) {
           }
         })
 
-        // 5) Met à jour picture_front sur l'équipement avec le filepath récupéré
         if (filepath) {
           const endpoint = matchedItem.type === 'Monitor'
             ? `${GLPI_URL}/Monitor/${matchedItem.id}`
             : `${GLPI_URL}/Computer/${matchedItem.id}`
 
           try {
-            const updateRes = await axios.put(endpoint, {
+            await axios.put(endpoint, {
               input: { picture_front: filepath }
             }, {
               headers: {
@@ -677,12 +868,9 @@ export async function importImagesZIP(file, onProgress) {
                 'Session-Token': sessionToken
               }
             })
-            console.log('🖼️ picture_front mis à jour :', filepath, '→', matchedItem.type, matchedItem.id, 'réponse:', updateRes.data)
           } catch (updateErr) {
             console.error('❌ Erreur mise à jour picture_front:', updateErr.response?.data || updateErr.message)
           }
-        } else {
-          console.warn('⚠️ filepath vide pour', fullFileName, '— picture_front non mis à jour')
         }
 
         importedCount++
@@ -691,7 +879,6 @@ export async function importImagesZIP(file, onProgress) {
       } catch (uploadErr) {
         console.error('❌ Erreur upload', filename, ':', uploadErr.response?.data || uploadErr.message)
 
-        // Rollback : supprime les documents déjà créés
         for (const dId of createdDocIds) {
           try {
             await axios.delete(`${GLPI_URL}/Document/${dId}`, {
@@ -712,7 +899,6 @@ export async function importImagesZIP(file, onProgress) {
       if (onProgress) onProgress(Math.round(((i + 1) / imageFiles.length) * 100))
     }
 
-    // Émettre un événement global pour notifier que les données ont changé
     window.dispatchEvent(new CustomEvent('glpi-data-changed', { detail: { type: 'images-imported' } }))
 
     return {
@@ -741,46 +927,30 @@ function getMimeType(extension) {
   return mimeTypes[extension.toLowerCase()] || 'image/jpeg'
 }
 
-/**
- * Détecte le vrai type MIME d'un fichier image par ses magic bytes.
- * Ignore complètement l'extension du fichier.
- * @param {Uint8Array} bytes  Les 12 premiers octets du fichier
- * @returns {string|null}     Le type MIME réel, ou null si non reconnu
- */
 function detectRealMimeType(bytes) {
-  // JPEG : FF D8 FF
   if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
     return 'image/jpeg'
   }
-  // PNG : 89 50 4E 47 0D 0A 1A 0A
   if (bytes[0] === 0x89 && bytes[1] === 0x50 &&
       bytes[2] === 0x4E && bytes[3] === 0x47) {
     return 'image/png'
   }
-  // GIF : 47 49 46 38
   if (bytes[0] === 0x47 && bytes[1] === 0x49 &&
       bytes[2] === 0x46 && bytes[3] === 0x38) {
     return 'image/gif'
   }
-  // WebP : 52 49 46 46 ?? ?? ?? ?? 57 45 42 50
   if (bytes[0] === 0x52 && bytes[1] === 0x49 &&
       bytes[2] === 0x46 && bytes[3] === 0x46 &&
       bytes[8] === 0x57 && bytes[9] === 0x45 &&
       bytes[10] === 0x42 && bytes[11] === 0x50) {
     return 'image/webp'
   }
-  // BMP : 42 4D
   if (bytes[0] === 0x42 && bytes[1] === 0x4D) {
     return 'image/bmp'
   }
   return null
 }
 
-/**
- * Retourne l'extension correcte pour un type MIME image.
- * @param {string} mime
- * @returns {string}
- */
 function mimeToExt(mime) {
   const map = {
     'image/jpeg': '.jpg',

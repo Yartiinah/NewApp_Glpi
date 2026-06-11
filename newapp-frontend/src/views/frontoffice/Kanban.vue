@@ -98,7 +98,7 @@
             </div>
           </div>
 
-          <!-- ⭐ DEMANDEUR (USER) - Version liste déroulante ⭐ -->
+          <!-- ⭐ DEMANDEUR (USER) ⭐ -->
           <div class="form-group">
             <label class="form-label">
               <i class="fa-solid fa-user"></i> Demandeur (optionnel)
@@ -197,10 +197,7 @@
 
           <div class="dialog-actions">
             <button type="button" @click="showCreateDialog = false" class="btn btn-secondary">Annuler</button>
-            <button type="submit" :disabled="submitting" class="btn btn-primary">
-              <i class="fa-solid" :class="submitting ? 'fa-spinner fa-spin' : 'fa-paper-plane'"></i>
-              {{ submitting ? 'Création...' : 'Créer' }}
-            </button>
+            <button type="submit" class="btn btn-primary">Créer</button>
           </div>
         </form>
       </div>
@@ -256,12 +253,12 @@
               <div v-for="cost in ticketCosts" :key="cost.id" class="cost-item">
                 <div class="cost-name">{{ cost.name || 'Coût' }}</div>
                 <div class="cost-details">
-                  <span v-if="cost.duration">Durée: {{ cost.duration }} min</span>
+                  <span v-if="cost.actiontime">Durée: {{ Math.round(cost.actiontime / 60) }} min</span>
                   <span v-if="cost.cost_time">Coût temps: {{ parseFloat(cost.cost_time).toFixed(2) }} €</span>
                   <span v-if="cost.cost_fixed">Coût fixe: {{ parseFloat(cost.cost_fixed).toFixed(2) }} €</span>
                 </div>
                 <div class="cost-total">
-                  {{ ((parseFloat(cost.cost_time) || 0) + (parseFloat(cost.cost_fixed) || 0)).toFixed(2) }} €
+                  {{ (parseFloat(cost.cost_time || 0) + parseFloat(cost.cost_fixed || 0)).toFixed(2) }} €
                 </div>
               </div>
             </div>
@@ -319,33 +316,18 @@ import {
   updateTicketStatus, 
   getAllItems, 
   linkItemToTicket, 
-  addTicketCost, 
+  addTicketCost,
   getTicketCosts, 
   getTicketLinkedItems, 
-  getTicketById,
+  getTicketById, 
   getUsers 
 } from '../../services/frontoffice/glpi.service'
-import { getKanbanConfig } from '../../services/backoffice/kanbanConfig.service'
 
 const columns = ref([
-  { id: 'nouveau',    name: 'Nouveau',     nameMg: 'vaovao',    status: 1, color: '#e0f2fe' },
+  { id: 'nouveau', name: 'Nouveau', nameMg: 'vaovao', status: 1, color: '#e0f2fe' },
   { id: 'inprogress', name: 'In progress', nameMg: 'efa manao', status: 2, color: '#fef3c7' },
-  { id: 'termine',    name: 'Terminé',     nameMg: 'vita',      status: 6, color: '#dcfce7' }
+  { id: 'termine', name: 'Terminé', nameMg: 'vita', status: 6, color: '#dcfce7' }
 ])
-
-async function loadKanbanConfig() {
-  try {
-    const cfg = await getKanbanConfig()
-    columns.value = columns.value.map(col => ({
-      ...col,
-      color:  cfg[`column_${col.id}_color`]  || col.color,
-      name:   cfg[`column_${col.id}_name_fr`] || col.name,
-      nameMg: cfg[`column_${col.id}_name_mg`] || col.nameMg
-    }))
-  } catch (err) {
-    console.warn('⚠️ Config kanban non disponible, valeurs par défaut utilisées:', err.message)
-  }
-}
 
 const tickets = ref([])
 const showCreateDialog = ref(false)
@@ -362,7 +344,13 @@ const ticketCosts = ref([])
 const ticketLinkedItems = ref([])
 const loadingTicketDetails = ref(false)
 
-// User fields - Version simple avec select
+// Cost fields for creation
+const costDuration = ref('')
+const costRate = ref('')
+const costFixed = ref('')
+const calculatedTotal = ref(0)
+
+// Utilisateur demandeur
 const users = ref([])
 const loadingUsers = ref(false)
 const selectedUserId = ref(null)
@@ -382,17 +370,20 @@ const newTicket = ref({
   status: 1
 })
 
-// Cost fields
-const costDuration = ref('')
-const costRate = ref('')
-const costFixed = ref('')
-const calculatedTotal = ref(0)
-
 // Equipment fields
 const items = ref([])
 const loadingItems = ref(false)
 const itemSearch = ref('')
 const selectedItemIds = ref([])
+
+// Calcul du total pour la création
+function calculateTotal() {
+  const duration = parseFloat(costDuration.value) || 0
+  const rate = parseFloat(costRate.value) || 0
+  const fixed = parseFloat(costFixed.value) || 0
+  const timeCost = (duration / 60) * rate
+  calculatedTotal.value = timeCost + fixed
+}
 
 async function fetchTickets() {
   try {
@@ -430,6 +421,12 @@ async function fetchUsers() {
   }
 }
 
+function getRequesterName(userId) {
+  if (!userId) return ''
+  const user = users.value.find(u => u.id === userId)
+  return user ? (user.realname || user.name) : `ID: ${userId}`
+}
+
 function getTicketsByStatus(status) {
   return tickets.value.filter(t => t.status === status)
 }
@@ -444,12 +441,6 @@ const filteredItems = computed(() => {
   })
 })
 
-function getRequesterName(userId) {
-  if (!userId) return ''
-  const user = users.value.find(u => u.id === userId)
-  return user ? (user.realname || user.name) : `ID: ${userId}`
-}
-
 const totalTicketCost = computed(() => {
   return ticketCosts.value.reduce((total, cost) => {
     const timeCost = parseFloat(cost.cost_time) || 0
@@ -457,14 +448,6 @@ const totalTicketCost = computed(() => {
     return total + timeCost + fixedCost
   }, 0)
 })
-
-function calculateTotal() {
-  const duration = parseFloat(costDuration.value) || 0
-  const rate = parseFloat(costRate.value) || 0
-  const fixed = parseFloat(costFixed.value) || 0
-  const timeCost = (duration / 60) * rate
-  calculatedTotal.value = timeCost + fixed
-}
 
 function onDragStart(event, ticket) {
   draggedTicket.value = ticket
@@ -513,10 +496,10 @@ async function createTicket() {
       priority: newTicket.value.priority,
       status: newTicket.value.status
     }
-
-    // Ajouter l'utilisateur demandeur si sélectionné
+    
     if (selectedUserId.value) {
       ticketPayload._users_id_requester = selectedUserId.value
+      console.log('👤 Demandeur associé:', selectedUserDisplay.value, '(ID:', selectedUserId.value, ')')
     }
 
     const ticketRes = await createTicketGLPI(ticketPayload)
@@ -533,23 +516,18 @@ async function createTicket() {
       }
     }
 
-    let costAdded = false
+    // Ajout du coût si des données sont fournies
     if (costDuration.value || costRate.value || costFixed.value) {
-      try {
-        const duration = parseFloat(costDuration.value) || 0
-        const rate = parseFloat(costRate.value) || 0
-        const fixed = parseFloat(costFixed.value) || 0
-        const timeCost = (duration / 60) * rate
-
-        await addTicketCost(newTicketId, {
-          duration: duration,
-          cost_time: timeCost,
-          cost_fixed: fixed
-        })
-        costAdded = true
-      } catch (err) {
-        console.error(`Failed to add cost to ticket ${newTicketId}:`, err)
-      }
+      const duration = parseFloat(costDuration.value) || 0
+      const rate = parseFloat(costRate.value) || 0
+      const fixed = parseFloat(costFixed.value) || 0
+      
+      await addTicketCost(newTicketId, {
+        duration: duration,
+        cost_time: rate,
+        cost_fixed: fixed,
+        name: 'Coût Intervention'
+      })
     }
 
     showCreateDialog.value = false
@@ -560,6 +538,7 @@ async function createTicket() {
     costRate.value = ''
     costFixed.value = ''
     calculatedTotal.value = 0
+
     await fetchTickets()
   } catch (err) {
     console.error('Failed to create ticket:', err)
@@ -582,6 +561,11 @@ async function showTicketDetails(ticket) {
       getTicketLinkedItems(ticket.id).catch(() => []),
       getTicketById(ticket.id).catch(() => ticket)
     ])
+
+    console.log('📊 Coûts reçus de GLPI:', costs)
+    costs.forEach(cost => {
+      console.log(`  - ${cost.name}: actiontime=${cost.actiontime}s, cost_time=${cost.cost_time}, cost_fixed=${cost.cost_fixed}`)
+    })
 
     ticketCosts.value = costs
     ticketLinkedItems.value = linkedItems
@@ -646,11 +630,9 @@ function formatDate(dateStr) {
 
 onMounted(() => {
   localStorage.removeItem('glpi_mock_mode')
-  loadKanbanConfig()
   fetchTickets()
   fetchEquipments()
   fetchUsers()
-  window.addEventListener('kanban-config-updated', loadKanbanConfig)
 })
 </script>
 
@@ -874,6 +856,157 @@ onMounted(() => {
   margin-top: 1.5rem;
 }
 
+/* Ticket Details */
+.ticket-details-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 0;
+  color: var(--text-muted);
+}
+
+.ticket-details-loading i {
+  font-size: 2rem;
+  color: var(--primary);
+}
+
+.ticket-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.detail-row {
+  display: flex;
+  gap: 1rem;
+}
+
+.detail-row.full-width {
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-label {
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 140px;
+  font-size: 0.9rem;
+}
+
+.detail-value {
+  color: var(--text-main);
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Detail Sections */
+.detail-section {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f8fafc;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.detail-section-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0 0 1rem 0;
+}
+
+/* Cost List */
+.costs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.cost-item {
+  background: white;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.cost-name {
+  font-weight: 600;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.cost-details {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.cost-details span {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.cost-total {
+  font-weight: 700;
+  color: var(--success);
+  font-size: 0.9rem;
+  text-align: right;
+}
+
+.total-cost-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 0.75rem;
+  border-top: 2px solid var(--border);
+}
+
+.total-cost-label {
+  font-weight: 700;
+  color: var(--text-main);
+  font-size: 0.95rem;
+}
+
+.total-cost-value {
+  font-weight: 700;
+  color: var(--success);
+  font-size: 1.1rem;
+}
+
+/* Linked Items List */
+.linked-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.linked-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  background: white;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.linked-item-type {
+  font-weight: 600;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.linked-item-id {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
 /* Form Styles */
 .form-row {
   display: flex;
@@ -926,16 +1059,6 @@ onMounted(() => {
 .form-textarea {
   resize: vertical;
   min-height: 80px;
-}
-
-/* Form Hint */
-.form-hint {
-  margin-top: 0.35rem;
-  font-size: 0.75rem;
-  color: var(--success);
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
 }
 
 /* Form Section */
@@ -1108,6 +1231,16 @@ onMounted(() => {
   text-align: center;
 }
 
+/* Form Hint */
+.form-hint {
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--success);
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 /* Cost Section Styles */
 .total-display {
   display: flex;
@@ -1124,156 +1257,5 @@ onMounted(() => {
   font-size: 1rem;
   font-weight: 700;
   color: var(--success);
-}
-
-/* Ticket Details */
-.ticket-details-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 3rem 0;
-  color: var(--text-muted);
-}
-
-.ticket-details-loading i {
-  font-size: 2rem;
-  color: var(--primary);
-}
-
-.ticket-details {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.detail-row {
-  display: flex;
-  gap: 1rem;
-}
-
-.detail-row.full-width {
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.detail-label {
-  font-weight: 600;
-  color: var(--text-muted);
-  min-width: 140px;
-  font-size: 0.9rem;
-}
-
-.detail-value {
-  color: var(--text-main);
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-
-/* Detail Sections */
-.detail-section {
-  margin-top: 1rem;
-  padding: 1rem;
-  background: #f8fafc;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-}
-
-.detail-section-title {
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--text-main);
-  margin: 0 0 1rem 0;
-}
-
-/* Cost List */
-.costs-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.cost-item {
-  background: white;
-  padding: 0.75rem;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.cost-name {
-  font-weight: 600;
-  color: var(--text-main);
-  font-size: 0.85rem;
-}
-
-.cost-details {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-
-.cost-details span {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-}
-
-.cost-total {
-  font-weight: 700;
-  color: var(--success);
-  font-size: 0.9rem;
-  text-align: right;
-}
-
-.total-cost-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-top: 0.75rem;
-  border-top: 2px solid var(--border);
-}
-
-.total-cost-label {
-  font-weight: 700;
-  color: var(--text-main);
-  font-size: 0.95rem;
-}
-
-.total-cost-value {
-  font-weight: 700;
-  color: var(--success);
-  font-size: 1.1rem;
-}
-
-/* Linked Items List */
-.linked-items-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.linked-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0.5rem 0.75rem;
-  background: white;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-}
-
-.linked-item-type {
-  font-weight: 600;
-  color: var(--text-main);
-  font-size: 0.85rem;
-}
-
-.linked-item-id {
-  font-size: 0.8rem;
-  color: var(--text-muted);
 }
 </style>
